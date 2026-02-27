@@ -40,7 +40,7 @@ package-lock.json
 
 # vercel
 .vercel
-
+.env
 # typescript
 *.tsbuildinfo
 next-env.d.ts
