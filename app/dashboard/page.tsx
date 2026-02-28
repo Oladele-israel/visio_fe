@@ -7,16 +7,67 @@ import { TableExplorer } from '@/components/table-explorer'
 import { sampleDatabase } from '@/lib/mock-data'
 import { useAuth } from '@/lib/auth-context'
 import type { Table as TableType } from '@/lib/mock-data'
+import { DashboardOverview } from '@/components/dashboardOverview'
+
+/* 🔥 Recharts Imports */
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts'
+
+interface MetricPoint {
+  time: string
+  queries: number
+  activeConnections: number
+  failedQueries: number
+}
 
 export default function DashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
+
+  /* ===============================
+     🔥 REALTIME METRICS STATE
+  ================================*/
+
+  const [metrics, setMetrics] = useState<MetricPoint[]>([])
+
+  useEffect(() => {
+    // Simulate live metric streaming
+    const interval = setInterval(() => {
+      const newMetric: MetricPoint = {
+        time: new Date().toLocaleTimeString(),
+        queries: Math.floor(Math.random() * 100),
+        activeConnections: Math.floor(Math.random() * 10),
+        failedQueries: Math.floor(Math.random() * 5),
+      }
+
+      setMetrics(prev => {
+        const updated = [...prev, newMetric]
+        // Keep only last 20 points
+        return updated.slice(-20)
+      })
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  /* ===============================
+     🔐 AUTH REDIRECT
+  ================================*/
 
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login')
     }
   }, [user, authLoading, router])
+
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [breadcrumb, setBreadcrumb] = useState<Array<{ table: string; id?: number }>>([])
   const [filters, setFilters] = useState<Record<string, any>>({})
@@ -27,17 +78,21 @@ export default function DashboardPage() {
     const baseTable = sampleDatabase[selectedTable as keyof typeof sampleDatabase]
     if (!baseTable) return null
 
-    // If we have a filter (relation traversal), filter rows
     if (filters.relationKey && filters.relationValue) {
-      const filtered = {
+      return {
         ...baseTable,
-        rows: baseTable.rows.filter(row => row[filters.relationKey] === filters.relationValue),
+        rows: baseTable.rows.filter(
+          row => row[filters.relationKey] === filters.relationValue
+        ),
       }
-      return filtered
     }
 
     return baseTable
   }, [selectedTable, filters])
+
+  /* ===============================
+     TABLE HANDLERS
+  ================================*/
 
   const handleSelectTable = (tableName: string) => {
     setSelectedTable(tableName)
@@ -64,6 +119,10 @@ export default function DashboardPage() {
     }
   }
 
+  /* ===============================
+     AUTH LOADING
+  ================================*/
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -75,16 +134,18 @@ export default function DashboardPage() {
     )
   }
 
-  if (!user) {
-    return null
-  }
+  if (!user) return null
+
+  /* ===============================
+     DASHBOARD UI
+  ================================*/
 
   return (
     <DashboardLayout
       selectedTable={selectedTable}
       onSelectTable={handleSelectTable}
       breadcrumb={breadcrumb}
-      onNavigate={(newBreadcrumb: Array<{ table: string; id?: number }>) => {
+      onNavigate={(newBreadcrumb) => {
         if (newBreadcrumb.length === 0) {
           setSelectedTable(null)
           setBreadcrumb([])
@@ -97,6 +158,10 @@ export default function DashboardPage() {
         }
       }}
     >
+      {/* ===============================
+          🔥 IF TABLE SELECTED
+      ================================*/}
+
       {selectedTable && currentTable ? (
         <TableExplorer
           table={currentTable}
@@ -112,11 +177,57 @@ export default function DashboardPage() {
           onTraverseRelation={handleTraverseRelation}
         />
       ) : (
-        <div className="flex flex-col items-center justify-center h-full">
-          <div className="text-center space-y-3">
-            <h2 className="text-2xl font-semibold text-foreground">Welcome to DBViz</h2>
-            <p className="text-muted-foreground">Select a table from the sidebar to start exploring</p>
+        /* ===============================
+           🚀 DASHBOARD OVERVIEW + CHARTS
+        ================================*/
+
+        <div className="p-6 space-y-8">
+
+          <DashboardOverview />
+
+          {/* 🔥 REALTIME CHART */}
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h2 className="text-lg font-semibold mb-4">
+              Real-Time Database Activity
+            </h2>
+
+            <div className="h-[350px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={metrics}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="time" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+
+                  <Line
+                    type="monotone"
+                    dataKey="queries"
+                    stroke="#2563eb"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+
+                  <Line
+                    type="monotone"
+                    dataKey="activeConnections"
+                    stroke="#16a34a"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+
+                  <Line
+                    type="monotone"
+                    dataKey="failedQueries"
+                    stroke="#dc2626"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
+
         </div>
       )}
     </DashboardLayout>

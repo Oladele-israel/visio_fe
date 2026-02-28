@@ -190,3 +190,84 @@ export const sampleDatabase: Record<string, Table> = {
     },
   },
 }
+
+
+export const dashboardStats = {
+  totalTables: 12,
+  totalRows: 145820,
+  activeConnections: 3,
+  queriesLastMinute: 48,
+  failedQueries: 2,
+  uptime: "14 days 6 hours",
+}
+
+export const activityLogs = [
+  {
+    id: 1,
+    action: "Query Executed",
+    table: "users",
+    time: "2 mins ago",
+  },
+  {
+    id: 2,
+    action: "Table Scanned",
+    table: "orders",
+    time: "5 mins ago",
+  },
+  {
+    id: 3,
+    action: "Row Updated",
+    table: "products",
+    time: "12 mins ago",
+  },
+]
+
+export const activeConnections = [
+  {
+    id: "conn-1",
+    database: "sample_db",
+    user: "admin",
+    status: "active",
+    ip: "192.168.1.10",
+  },
+  {
+    id: "conn-2",
+    database: "sample_db",
+    user: "viewer",
+    status: "idle",
+    ip: "192.168.1.12",
+  },
+]
+
+
+
+export interface MetricPoint {
+  time: string
+  queries: number
+  activeConnections: number
+  failedQueries: number
+}
+
+let listeners: ((data: MetricPoint) => void)[] = []
+
+// Simulate live streaming
+export function startMetricStream() {
+  setInterval(() => {
+    const newPoint: MetricPoint = {
+      time: new Date().toLocaleTimeString(),
+      queries: Math.floor(Math.random() * 100),
+      activeConnections: Math.floor(Math.random() * 10),
+      failedQueries: Math.floor(Math.random() * 5),
+    }
+
+    listeners.forEach(listener => listener(newPoint))
+  }, 3000) // every 3 seconds
+}
+
+export function subscribeToMetrics(callback: (data: MetricPoint) => void) {
+  listeners.push(callback)
+
+  return () => {
+    listeners = listeners.filter(l => l !== callback)
+  }
+}

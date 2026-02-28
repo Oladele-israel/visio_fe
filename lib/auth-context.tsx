@@ -33,10 +33,13 @@ export const AuthProvider = ({ children }: any) => {
   };
 
   const login = async (email: string, password: string) => {
-    const res = await api.post("/auth/login", { email, password });
-
-    setAccessToken(res.data.authenticated.accessToken);
-    setUser(res.data.user);
+    try {
+      const res = await api.post("/auth/login", { email, password });
+      setAccessToken(res.data.authenticated.accessToken);
+      setUser(res.data.user);
+    } catch (err: any) {
+      throw err.response?.data || { message: "Login failed" };
+    }
   };
 
   const signup = async (
@@ -44,15 +47,19 @@ export const AuthProvider = ({ children }: any) => {
     password: string,
     name: string
   ) => {
-    const res = await api.post("/auth/register", {
-      email,
-      password,
-      name,
-      role: "VIEWER",
-    });
+    try {
+      const res = await api.post("/auth/register", {
+        email,
+        password,
+        name,
+        role: "VIEWER",
+      });
 
-    setAccessToken(res.data.authenticated.accessToken);
-    setUser(res.data.user);
+      setAccessToken(res.data.authenticated.accessToken);
+      setUser(res.data.user);
+    } catch (err: any) {
+      throw err.response?.data || { message: "Login failed" };
+    }
   };
 
   const logout = async () => {

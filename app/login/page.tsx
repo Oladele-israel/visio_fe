@@ -47,11 +47,10 @@ export default function LoginPage() {
 
       await login(formData.email, formData.password)
 
-      // Redirect to dashboard
       router.replace('/dashboard')
 
     } catch (err: any) {
-      setError(err?.message || 'Login failed')
+      setError(err?.message || "login failed")
     } finally {
       setIsLoading(false)
     }

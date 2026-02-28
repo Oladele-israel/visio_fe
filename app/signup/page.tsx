@@ -22,11 +22,10 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  // ✅ Password visibility states
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
-  // ✅ Redirect logged-in users
+
   useEffect(() => {
     if (!loading && user) {
       router.replace("/dashboard")
@@ -69,7 +68,6 @@ export default function SignupPage() {
         formData.name
       )
 
-      // ✅ Prevent back navigation to signup
       router.replace("/dashboard")
     } catch (err: any) {
       const message =
@@ -85,7 +83,6 @@ export default function SignupPage() {
     }
   }
 
-  // ✅ Prevent UI flash while auth bootstraps
   if (loading) return null
 
   return (
