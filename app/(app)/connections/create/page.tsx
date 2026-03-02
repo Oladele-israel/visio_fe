@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { api } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -133,13 +134,22 @@ export default function CreateConnectionPage() {
     setIsLoading(true)
 
     try {
-      // Replace with your real API call:
-      // await api.post('/connections', { ...form, port: parseInt(form.port, 10), ssl: form.ssl })
-      await new Promise(r => setTimeout(r, 1200)) // mock
+      // ── API CALL: POST /db-agent ───────────────────────────────────────
+      await api.post('/db-agent', {
+        name:     form.name,
+        type:     form.type, // backend expects "POSTGRES" not "postgres"
+        host:     form.host,
+        port:     parseInt(form.port, 10),
+        database: form.database,
+        username: form.username,
+        password: form.password,
+        ssl:      form.ssl,
+      })
+      // ─────────────────────────────────────────────────────────────────
       setIsSuccess(true)
       setTimeout(() => router.push('/connections'), 1500)
     } catch (err: any) {
-      setApiError(err?.message || 'Failed to create connection')
+      setApiError(err?.response?.data?.message ?? 'Failed to create connection')
     } finally {
       setIsLoading(false)
     }
