@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { api } from '@/lib/api'
 import {
   Database, Table2, ChevronRight, ChevronDown,
   Search, X, ArrowLeft, Loader2,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react'
 
 /* ─────────────────────────────────────────
-   TYPES
+   TYPES — match backend response shapes exactly
 ───────────────────────────────────────── */
 interface Column {
   name: string
@@ -47,170 +48,6 @@ interface BreadcrumbItem {
   pk?: string | number
 }
 
-/* ─────────────────────────────────────────
-   MOCK SCHEMA — mirrors real API response
-   shape from GET /connections/:id/schema
-───────────────────────────────────────── */
-const MOCK_SCHEMA: Table[] = [
-  {
-    name: 'users',
-    columns: [
-      { name: 'id',         dataType: 'integer',                  isNullable: false, isPrimaryKey: true  },
-      { name: 'name',       dataType: 'character varying(255)',    isNullable: false, isPrimaryKey: false },
-      { name: 'email',      dataType: 'character varying(255)',    isNullable: false, isPrimaryKey: false },
-      { name: 'created_at', dataType: 'timestamp without time zone', isNullable: true, isPrimaryKey: false },
-      { name: 'is_active',  dataType: 'boolean',                  isNullable: true,  isPrimaryKey: false },
-    ],
-  },
-  {
-    name: 'orders',
-    columns: [
-      { name: 'id',         dataType: 'integer',    isNullable: false, isPrimaryKey: true  },
-      { name: 'user_id',    dataType: 'integer',    isNullable: false, isPrimaryKey: false },
-      { name: 'total',      dataType: 'numeric',    isNullable: false, isPrimaryKey: false },
-      { name: 'status',     dataType: 'character varying(50)', isNullable: false, isPrimaryKey: false },
-      { name: 'created_at', dataType: 'timestamp without time zone', isNullable: true, isPrimaryKey: false },
-    ],
-  },
-  {
-    name: 'products',
-    columns: [
-      { name: 'id',          dataType: 'integer',                isNullable: false, isPrimaryKey: true  },
-      { name: 'name',        dataType: 'character varying(255)', isNullable: false, isPrimaryKey: false },
-      { name: 'price',       dataType: 'numeric',                isNullable: false, isPrimaryKey: false },
-      { name: 'stock',       dataType: 'integer',                isNullable: true,  isPrimaryKey: false },
-      { name: 'category_id', dataType: 'integer',                isNullable: true,  isPrimaryKey: false },
-    ],
-  },
-  {
-    name: 'order_items',
-    columns: [
-      { name: 'id',         dataType: 'integer', isNullable: false, isPrimaryKey: true  },
-      { name: 'order_id',   dataType: 'integer', isNullable: false, isPrimaryKey: false },
-      { name: 'product_id', dataType: 'integer', isNullable: false, isPrimaryKey: false },
-      { name: 'quantity',   dataType: 'integer', isNullable: false, isPrimaryKey: false },
-      { name: 'unit_price', dataType: 'numeric', isNullable: false, isPrimaryKey: false },
-    ],
-  },
-  {
-    name: 'categories',
-    columns: [
-      { name: 'id',          dataType: 'integer',                isNullable: false, isPrimaryKey: true  },
-      { name: 'name',        dataType: 'character varying(100)', isNullable: false, isPrimaryKey: false },
-      { name: 'description', dataType: 'text',                   isNullable: true,  isPrimaryKey: false },
-    ],
-  },
-  {
-    name: 'payments',
-    columns: [
-      { name: 'id',         dataType: 'integer',                isNullable: false, isPrimaryKey: true  },
-      { name: 'order_id',   dataType: 'integer',                isNullable: false, isPrimaryKey: false },
-      { name: 'amount',     dataType: 'numeric',                isNullable: false, isPrimaryKey: false },
-      { name: 'method',     dataType: 'character varying(50)',  isNullable: false, isPrimaryKey: false },
-      { name: 'paid_at',    dataType: 'timestamp without time zone', isNullable: true, isPrimaryKey: false },
-    ],
-  },
-]
-
-/* ─────────────────────────────────────────
-   MOCK ROWS — mirrors POST /:table/query
-───────────────────────────────────────── */
-const MOCK_ROWS: Record<string, QueryResult> = {
-  users: {
-    columns: ['id', 'name', 'email', 'created_at', 'is_active'],
-    rows: [
-      { id: 1, name: 'Alice Johnson',  email: 'alice@example.com',  created_at: '2024-01-10 09:23:00', is_active: true  },
-      { id: 2, name: 'Bob Smith',      email: 'bob@example.com',    created_at: '2024-01-15 14:05:00', is_active: true  },
-      { id: 3, name: 'Carol White',    email: 'carol@example.com',  created_at: '2024-02-01 08:00:00', is_active: false },
-      { id: 4, name: 'David Lee',      email: 'david@example.com',  created_at: '2024-02-20 17:30:00', is_active: true  },
-      { id: 5, name: 'Eva Martinez',   email: 'eva@example.com',    created_at: '2024-03-05 11:15:00', is_active: true  },
-      { id: 6, name: 'Frank Brown',    email: 'frank@example.com',  created_at: '2024-03-18 10:00:00', is_active: false },
-    ],
-  },
-  orders: {
-    columns: ['id', 'user_id', 'total', 'status', 'created_at'],
-    rows: [
-      { id: 101, user_id: 1, total: 250.00, status: 'completed', created_at: '2024-02-01 10:00:00' },
-      { id: 102, user_id: 2, total: 89.99,  status: 'pending',   created_at: '2024-02-15 14:30:00' },
-      { id: 103, user_id: 1, total: 430.50, status: 'completed', created_at: '2024-03-01 09:15:00' },
-      { id: 104, user_id: 3, total: 119.00, status: 'cancelled', created_at: '2024-03-10 16:45:00' },
-      { id: 105, user_id: 4, total: 720.00, status: 'completed', created_at: '2024-03-20 11:00:00' },
-      { id: 106, user_id: 5, total: 55.25,  status: 'pending',   created_at: '2024-04-01 08:30:00' },
-    ],
-  },
-  products: {
-    columns: ['id', 'name', 'price', 'stock', 'category_id'],
-    rows: [
-      { id: 1, name: 'Wireless Keyboard', price: 79.99,  stock: 45,  category_id: 1 },
-      { id: 2, name: 'USB-C Hub',         price: 49.99,  stock: 120, category_id: 1 },
-      { id: 3, name: 'Standing Desk',     price: 499.00, stock: 12,  category_id: 2 },
-      { id: 4, name: 'Monitor Arm',       price: 89.99,  stock: 30,  category_id: 2 },
-      { id: 5, name: 'Blue Light Glasses',price: 29.99,  stock: 200, category_id: 3 },
-    ],
-  },
-  order_items: {
-    columns: ['id', 'order_id', 'product_id', 'quantity', 'unit_price'],
-    rows: [
-      { id: 1, order_id: 101, product_id: 1, quantity: 2, unit_price: 79.99  },
-      { id: 2, order_id: 101, product_id: 2, quantity: 1, unit_price: 49.99  },
-      { id: 3, order_id: 102, product_id: 3, quantity: 1, unit_price: 89.99  },
-      { id: 4, order_id: 103, product_id: 4, quantity: 3, unit_price: 79.99  },
-      { id: 5, order_id: 105, product_id: 5, quantity: 2, unit_price: 499.00 },
-    ],
-  },
-  categories: {
-    columns: ['id', 'name', 'description'],
-    rows: [
-      { id: 1, name: 'Electronics',  description: 'Tech gadgets and accessories' },
-      { id: 2, name: 'Furniture',    description: 'Office and home furniture'     },
-      { id: 3, name: 'Accessories',  description: 'Wearable accessories'          },
-    ],
-  },
-  payments: {
-    columns: ['id', 'order_id', 'amount', 'method', 'paid_at'],
-    rows: [
-      { id: 1, order_id: 101, amount: 250.00, method: 'credit_card', paid_at: '2024-02-01 10:05:00' },
-      { id: 2, order_id: 103, amount: 430.50, method: 'paypal',      paid_at: '2024-03-01 09:20:00' },
-      { id: 3, order_id: 105, amount: 720.00, method: 'credit_card', paid_at: '2024-03-20 11:10:00' },
-    ],
-  },
-}
-
-/* ─────────────────────────────────────────
-   MOCK RELATIONS — mirrors GET /relation/:table
-───────────────────────────────────────── */
-const MOCK_RELATIONS: Record<string, Relation[]> = {
-  users: [
-    { type: 'hasMany', fromTable: 'users', fromColumn: 'id', toTable: 'orders', toColumn: 'user_id', constraint: 'orders_user_id_fkey' },
-  ],
-  orders: [
-    { type: 'belongsTo', fromTable: 'orders', fromColumn: 'user_id',  toTable: 'users',       toColumn: 'id', constraint: 'orders_user_id_fkey'       },
-    { type: 'hasMany',   fromTable: 'orders', fromColumn: 'id',       toTable: 'order_items', toColumn: 'order_id', constraint: 'order_items_order_id_fkey' },
-    { type: 'hasMany',   fromTable: 'orders', fromColumn: 'id',       toTable: 'payments',    toColumn: 'order_id', constraint: 'payments_order_id_fkey'    },
-  ],
-  products: [
-    { type: 'belongsTo', fromTable: 'products', fromColumn: 'category_id', toTable: 'categories', toColumn: 'id', constraint: 'products_category_id_fkey' },
-    { type: 'hasMany',   fromTable: 'products', fromColumn: 'id',          toTable: 'order_items', toColumn: 'product_id', constraint: 'order_items_product_id_fkey' },
-  ],
-  order_items: [
-    { type: 'belongsTo', fromTable: 'order_items', fromColumn: 'order_id',   toTable: 'orders',   toColumn: 'id', constraint: 'order_items_order_id_fkey'   },
-    { type: 'belongsTo', fromTable: 'order_items', fromColumn: 'product_id', toTable: 'products', toColumn: 'id', constraint: 'order_items_product_id_fkey' },
-  ],
-  categories: [
-    { type: 'hasMany', fromTable: 'categories', fromColumn: 'id', toTable: 'products', toColumn: 'category_id', constraint: 'products_category_id_fkey' },
-  ],
-  payments: [
-    { type: 'belongsTo', fromTable: 'payments', fromColumn: 'order_id', toTable: 'orders', toColumn: 'id', constraint: 'payments_order_id_fkey' },
-  ],
-}
-
-const CONNECTION_NAMES: Record<string, string> = {
-  '1': 'Production DB',
-  '2': 'Staging MySQL',
-  '3': 'Local Dev',
-  '4': 'Analytics MSSQL',
-}
-
 const PAGE_SIZE = 20
 
 /* ─────────────────────────────────────────
@@ -233,8 +70,18 @@ function formatCellValue(val: any): string {
   return String(val)
 }
 
-function findRelation(colName: string, relations: Relation[]): Relation | undefined {
-  return relations.find(r => r.fromColumn === colName)
+function findFkRelation(colName: string, relations: Relation[]): Relation | undefined {
+  return relations.find(r => r.type === 'belongsTo' && r.fromColumn === colName)
+}
+
+function dedupeRelations(relations: Relation[]): Relation[] {
+  const seen = new Set<string>()
+  return relations.filter(r => {
+    const key = `${r.type}:${r.toTable}:${r.fromColumn}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 /* ─────────────────────────────────────────
@@ -242,7 +89,7 @@ function findRelation(colName: string, relations: Relation[]): Relation | undefi
 ───────────────────────────────────────── */
 function ColBadge({ col }: { col: Column }) {
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-background border border-border text-xs transition-colors">
+    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-background border border-border text-xs">
       {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
       <span className="font-medium text-foreground truncate max-w-[90px]">{col.name}</span>
       <span className="text-[10px] text-muted-foreground hidden sm:inline truncate max-w-[70px]">
@@ -257,135 +104,262 @@ function ColBadge({ col }: { col: Column }) {
    MAIN PAGE
 ───────────────────────────────────────── */
 export default function VisualizePage() {
-  const params  = useParams()
-  const router  = useRouter()
-  const connectionId   = params.id as string
-  const connectionName = CONNECTION_NAMES[connectionId] ?? `Connection ${connectionId}`
+  const params       = useParams()
+  const router       = useRouter()
+  const connectionId = params.id as string
 
   /* ── Layout ── */
-  const [sidebarOpen,       setSidebarOpen]       = useState(true)
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  /* ── Table state ── */
-  const [selectedTable,  setSelectedTable]  = useState<string | null>(null)
-  const [relations,      setRelations]      = useState<Relation[]>([])
-  const [queryResult,    setQueryResult]    = useState<QueryResult | null>(null)
-  const [queryLoading,   setQueryLoading]   = useState(false)
-  const [breadcrumb,     setBreadcrumb]     = useState<BreadcrumbItem[]>([])
+  /* ── Schema ── */
+  const [schema,         setSchema]         = useState<Table[]>([])
+  const [schemaLoading,  setSchemaLoading]  = useState(true)
+  const [schemaError,    setSchemaError]    = useState<string | null>(null)
+  const [connectionName, setConnectionName] = useState(`Connection ${connectionId}`)
+
+  /* ── Table data ── */
+  const [selectedTable, setSelectedTable] = useState<string | null>(null)
+  const [relations,     setRelations]     = useState<Relation[]>([])
+  const [queryResult,   setQueryResult]   = useState<QueryResult | null>(null)
+  const [queryLoading,  setQueryLoading]  = useState(false)
+  const [queryError,    setQueryError]    = useState<string | null>(null)
+  const [breadcrumb,    setBreadcrumb]    = useState<BreadcrumbItem[]>([])
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
 
   /* ── Controls ── */
-  const [tableSearch,  setTableSearch]  = useState('')
-  const [rowFilter,    setRowFilter]    = useState('')
-  const [page,         setPage]         = useState(0)
-  const [orderBy,      setOrderBy]      = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
+  const [tableSearch, setTableSearch] = useState('')
+  const [rowFilter,   setRowFilter]   = useState('')
+  const [page,        setPage]        = useState(0)
+  const [orderBy,     setOrderBy]     = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
 
-  /* ── Simulate async table query ── */
-  const mockQueryTable = (tableName: string, pg = 0, ob: typeof orderBy = null) => {
-    setQueryLoading(true)
-    setQueryError(null)
-    setTimeout(() => {
-      const data = MOCK_ROWS[tableName]
-      if (!data) { setQueryError('Table not found'); setQueryLoading(false); return }
+  /* ─────────────────────────────────────
+     SESSION BOOTSTRAP
+     
+     FIX: We now return the sessionId so callers can use it immediately
+     rather than relying on axios defaults being set in time.
+     We also clear any stale session data tied to a different connectionId
+     so we never send a sessionId that belongs to a different database.
+  ───────────────────────────────────── */
+  const establishSession = useCallback(async (): Promise<string | null> => {
+    // FIX: Clear stale session if it belongs to a different connection
+    const storedConnectionId = sessionStorage.getItem('db-session-connection-id')
+    if (storedConnectionId !== connectionId) {
+      sessionStorage.removeItem('db-session-id')
+      sessionStorage.removeItem('db-session-connection-id')
+      delete api.defaults.headers.common['X-Session-Id']
+    }
 
-      let rows = [...data.rows]
+    try {
+      const connectRes = await api.post(`/db-agent/${connectionId}/connect`)
+      const sessionId =
+        connectRes.data?.sessionId ??
+        connectRes.data?.session_id ??
+        connectRes.data?.data?.sessionId ?? null
 
-      // Apply sort
-      if (ob) {
-        rows.sort((a, b) => {
-          const av = a[ob.column], bv = b[ob.column]
-          if (av == null) return 1
-          if (bv == null) return -1
-          return ob.direction === 'asc'
-            ? String(av).localeCompare(String(bv), undefined, { numeric: true })
-            : String(bv).localeCompare(String(av), undefined, { numeric: true })
-        })
+      if (sessionId) {
+        sessionStorage.setItem('db-session-id', sessionId)
+        sessionStorage.setItem('db-session-connection-id', connectionId)
+        // FIX: Set header synchronously before any subsequent calls
+        api.defaults.headers.common['X-Session-Id'] = sessionId
       }
 
-      // Paginate
-      const start = pg * PAGE_SIZE
-      rows = rows.slice(start, start + PAGE_SIZE)
+      return sessionId
+    } catch (err: any) {
+      return null
+    }
+  }, [connectionId])
 
-      setQueryResult({ columns: data.columns, rows })
+  /* ─────────────────────────────────────
+     API CALL 1 — GET /db-agent/:id/schema
+
+     FIX: establishSession() must fully resolve before schema fetch.
+     Previously these ran concurrently via Promise.all which meant the
+     schema request could fire before the new X-Session-Id header was set,
+     causing the backend to serve schema for the wrong (or cached) session.
+
+     FIX: We also explicitly invalidate the schema cache on the backend
+     before fetching fresh schema, so switching databases always returns
+     the correct database's tables — not a cached version from the
+     previous connection's session.
+  ───────────────────────────────────── */
+  const loadSchema = useCallback(async () => {
+    setSchemaLoading(true)
+    setSchemaError(null)
+    setSchema([])
+    setSelectedTable(null)
+    setBreadcrumb([])
+
+    // FIX: Await session fully before any schema/query calls
+    const sessionId = await establishSession()
+
+    if (!sessionId) {
+      setSchemaError('Failed to establish session. Check connection settings.')
+      setSchemaLoading(false)
+      return
+    }
+
+    try {
+      // Cache invalidation is handled by the backend in connectUserDbConnection()
+      // before every new session is created — no need to call it here.
+      const [schemaRes, connRes] = await Promise.all([
+        api.get(`/db-agent/${connectionId}/schema`, {
+          headers: { 'X-Session-Id': sessionId },
+        }),
+        api.get(`/db-agent/${connectionId}`).catch(() => null),
+      ])
+
+      const tables: Table[] = Array.isArray(schemaRes.data)
+        ? schemaRes.data
+        : (schemaRes.data?.data ?? [])
+      setSchema(tables)
+
+      const name = connRes?.data?.data?.name ?? connRes?.data?.name
+      if (name) setConnectionName(name)
+    } catch (err: any) {
+      setSchemaError(err?.response?.data?.message ?? 'Failed to load schema')
+    } finally {
+      setSchemaLoading(false)
+    }
+  }, [connectionId, establishSession])
+
+  // FIX: Reset all table/query state when connectionId changes so stale
+  // data from the previous database is never displayed on the new one.
+  useEffect(() => {
+    setSelectedTable(null)
+    setQueryResult(null)
+    setRelations([])
+    setBreadcrumb([])
+    setPage(0)
+    setOrderBy(null)
+    setRowFilter('')
+    loadSchema()
+  }, [connectionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // NOTE: intentionally not including loadSchema in deps — connectionId
+  // change is the only trigger we want here to avoid double-fetching.
+
+  /* ─────────────────────────────────────
+     API CALL 2 — GET /db-agent/:id/relation/:table
+  ───────────────────────────────────── */
+  const loadRelations = useCallback(async (tableName: string) => {
+    try {
+      const res = await api.get(`/db-agent/${connectionId}/relation/${tableName}`)
+      const rels: Relation[] =
+        res.data?.data?.relations ??
+        res.data?.relations ??
+        []
+      setRelations(rels)
+    } catch {
+      setRelations([])
+    }
+  }, [connectionId])
+
+  /* ─────────────────────────────────────
+     API CALL 3 — POST /db-agent/:id/:table/query
+  ───────────────────────────────────── */
+  const queryTable = useCallback(async (
+    tableName: string,
+    pg = 0,
+    ob: { column: string; direction: 'asc' | 'desc' } | null = null,
+  ) => {
+    setQueryLoading(true)
+    setQueryError(null)
+    try {
+      const res = await api.post(`/db-agent/${connectionId}/${tableName}/query`, {
+        limit:  PAGE_SIZE,
+        offset: pg * PAGE_SIZE,
+        ...(ob ? { orderBy: { column: ob.column, direction: ob.direction } } : {}),
+      })
+      const result: QueryResult = res.data?.data ?? res.data
+      setQueryResult(result)
+    } catch (err: any) {
+      setQueryError(err?.response?.data?.message ?? 'Failed to load rows')
+      setQueryResult(null)
+    } finally {
       setQueryLoading(false)
-    }, 300)
-  }
+    }
+  }, [connectionId])
 
-  const [queryError, setQueryError] = useState<string | null>(null)
+  /* ─────────────────────────────────────
+     API CALL 4 — POST /db-agent/:id/relations/query
+  ───────────────────────────────────── */
+  const traverseRelation = useCallback(async (
+    rel: Relation,
+    pkValue: string | number,
+    currentTable: string,
+  ) => {
+    setQueryLoading(true)
+    setQueryError(null)
+    try {
+      const res = await api.post(`/db-agent/${connectionId}/relations/query`, {
+        sourceTable: currentTable,
+        sourceWhere: { [rel.fromColumn]: pkValue },
+        targetTable: rel.toTable,
+      })
+      const result: QueryResult = res.data?.data ?? res.data
+      setQueryResult(result)
+      setSelectedTable(rel.toTable)
+      setBreadcrumb(prev => [...prev, {
+        table: rel.toTable,
+        label: rel.toTable,
+        pk: pkValue,
+      }])
+      await loadRelations(rel.toTable)
+    } catch (err: any) {
+      setQueryError(err?.response?.data?.message ?? 'Failed to traverse relation')
+    } finally {
+      setQueryLoading(false)
+    }
+  }, [connectionId, loadRelations])
 
   /* ── Select table ── */
-  const handleSelectTable = (table: string) => {
+  const handleSelectTable = useCallback(async (table: string) => {
     setSelectedTable(table)
     setBreadcrumb([{ table, label: table }])
     setPage(0)
     setOrderBy(null)
     setRowFilter('')
-    setRelations(MOCK_RELATIONS[table] ?? [])
-    setMobileSidebarOpen(false)
-    mockQueryTable(table, 0, null)
-  }
+    await Promise.all([queryTable(table, 0, null), loadRelations(table)])
+  }, [queryTable, loadRelations])
 
-  /* ── Traverse relation ── */
-  const handleTraverseRelation = (rel: Relation, pkValue: string | number) => {
-    const targetTable = rel.toTable
-    setQueryLoading(true)
-    setTimeout(() => {
-      // Filter target table rows by the FK value
-      const data = MOCK_ROWS[targetTable]
-      if (!data) { setQueryError('Related table not found'); setQueryLoading(false); return }
-
-      const rows = data.rows.filter(r => r[rel.toColumn] === pkValue)
-      setQueryResult({ columns: data.columns, rows })
-      setSelectedTable(targetTable)
-      setRelations(MOCK_RELATIONS[targetTable] ?? [])
-      setBreadcrumb(prev => [...prev, { table: targetTable, label: targetTable, pk: pkValue }])
-      setQueryLoading(false)
-    }, 300)
-  }
-
-  /* ── Breadcrumb nav ── */
-  const handleBreadcrumbClick = (index: number) => {
+  /* ── Breadcrumb ── */
+  const handleBreadcrumbClick = useCallback(async (index: number) => {
     const crumb = breadcrumb[index]
     setBreadcrumb(breadcrumb.slice(0, index + 1))
     setSelectedTable(crumb.table)
-    setRelations(MOCK_RELATIONS[crumb.table] ?? [])
     setPage(0)
     setOrderBy(null)
-    mockQueryTable(crumb.table, 0, null)
-  }
+    await Promise.all([queryTable(crumb.table, 0, null), loadRelations(crumb.table)])
+  }, [breadcrumb, queryTable, loadRelations])
 
   /* ── Sort ── */
-  const handleSort = (col: string) => {
+  const handleSort = useCallback((col: string) => {
     const next = orderBy?.column === col && orderBy.direction === 'asc'
       ? { column: col, direction: 'desc' as const }
       : { column: col, direction: 'asc'  as const }
     setOrderBy(next)
-    mockQueryTable(selectedTable!, page, next)
-  }
+    queryTable(selectedTable!, page, next)
+  }, [orderBy, page, selectedTable, queryTable])
 
   /* ── Pagination ── */
-  const handlePage = (dir: 1 | -1) => {
+  const handlePage = useCallback((dir: 1 | -1) => {
     const next = page + dir
     setPage(next)
-    mockQueryTable(selectedTable!, next, orderBy)
-  }
+    queryTable(selectedTable!, next, orderBy)
+  }, [page, selectedTable, orderBy, queryTable])
 
-  /* ── Toggle sidebar table expand ── */
-  const toggleExpand = (tableName: string) => {
+  const toggleExpand = (tableName: string) =>
     setExpandedTables(prev => {
       const next = new Set(prev)
       next.has(tableName) ? next.delete(tableName) : next.add(tableName)
       return next
     })
-  }
 
-  /* ── Filtered schema ── */
+  /* ── Derived ── */
   const filteredSchema = useMemo(() =>
-    MOCK_SCHEMA.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase())),
-    [tableSearch]
+    schema.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase())),
+    [schema, tableSearch]
   )
 
-  /* ── Filtered rows ── */
   const filteredRows = useMemo(() => {
     if (!queryResult) return []
     if (!rowFilter.trim()) return queryResult.rows
@@ -395,10 +369,9 @@ export default function VisualizePage() {
     )
   }, [queryResult, rowFilter])
 
-  /* ── Current table schema ── */
   const currentTableSchema = useMemo(() =>
-    MOCK_SCHEMA.find(t => t.name === selectedTable),
-    [selectedTable]
+    schema.find(t => t.name === selectedTable),
+    [schema, selectedTable]
   )
 
   /* ─────────────────────────────────────────
@@ -406,8 +379,6 @@ export default function VisualizePage() {
   ───────────────────────────────────────── */
   const SidebarInner = () => (
     <div className="h-full flex flex-col bg-card">
-
-      {/* Header */}
       <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
         <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-sm shrink-0">
           <LucideLink className="w-4 h-4 text-primary-foreground" />
@@ -436,73 +407,79 @@ export default function VisualizePage() {
         </div>
       </div>
 
-      {/* Table count label */}
+      {/* Count */}
       <div className="px-5 pb-1 shrink-0">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
-        </p>
+        {schemaLoading ? (
+          <div className="h-3 w-16 bg-border rounded animate-pulse" />
+        ) : (
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
+          </p>
+        )}
       </div>
 
-      {/* Table list */}
-      <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
-        {filteredSchema.map(table => {
-          const isSelected = selectedTable === table.name
-          const isExpanded = expandedTables.has(table.name)
-          return (
-            <div key={table.name}>
-              <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
+      {schemaError && !schemaLoading && (
+        <div className="mx-3 mb-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-start gap-2">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div>
+            <p>{schemaError}</p>
+            <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">Retry</button>
+          </div>
+        </div>
+      )}
 
-                {/* Expand chevron */}
-                <button
-                  onClick={() => toggleExpand(table.name)}
-                  className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0"
-                >
-                  {isExpanded
-                    ? <ChevronDown className="w-3 h-3" />
-                    : <ChevronRight className="w-3 h-3" />
-                  }
-                </button>
-
-                {/* Table name */}
-                <button
-                  onClick={() => handleSelectTable(table.name)}
-                  className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${
-                    isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'
-                  }`}
-                >
-                  <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{table.name}</span>
-                  <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">
-                    {table.columns.length}
-                  </span>
-                </button>
-              </div>
-
-              {/* Expanded columns */}
-              {isExpanded && (
-                <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border space-y-0.5">
-                  {table.columns.map(col => (
-                    <div key={col.name} className="flex items-center gap-1.5 py-0.5">
-                      {col.isPrimaryKey
-                        ? <Key className="w-3 h-3 text-yellow-400 shrink-0" />
-                        : typeIcon(col.dataType)
-                      }
-                      <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">
-                        {col.name}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
-                        {col.dataType.split('(')[0].replace(' without time zone', '')}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
+      {schemaLoading && (
+        <div className="px-3 space-y-1 flex-1">
+          {[1,2,3,4,5].map(i => (
+            <div key={i} className="flex items-center gap-2 px-2 py-2 animate-pulse">
+              <div className="w-3 h-3 bg-border rounded" />
+              <div className="h-3 bg-border rounded" style={{ width: `${50 + i * 8}%` }} />
             </div>
-          )
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {/* Footer */}
+      {!schemaLoading && (
+        <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+          {filteredSchema.map(table => {
+            const isSelected = selectedTable === table.name
+            const isExpanded = expandedTables.has(table.name)
+            return (
+              <div key={table.name}>
+                <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
+                  <button onClick={() => toggleExpand(table.name)} className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0">
+                    {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={() => handleSelectTable(table.name)}
+                    className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${
+                      isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'
+                    }`}
+                  >
+                    <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{table.name}</span>
+                    <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">{table.columns.length}</span>
+                  </button>
+                </div>
+                {isExpanded && (
+                  <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border space-y-0.5">
+                    {table.columns.map(col => (
+                      <div key={col.name} className="flex items-center gap-1.5 py-0.5">
+                        {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
+                        <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">{col.name}</span>
+                        <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
+                          {col.dataType.split('(')[0].replace(' without time zone', '')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       <div className="border-t border-border p-3 shrink-0">
         <button
           onClick={() => router.push('/connections')}
@@ -511,23 +488,6 @@ export default function VisualizePage() {
           <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
           Back to Connections
         </button>
-      </div>
-    </div>
-  )
-
-  /* ─────────────────────────────────────────
-     EMPTY STATE
-  ───────────────────────────────────────── */
-  const EmptyState = () => (
-    <div className="flex-1 flex items-center justify-center p-8">
-      <div className="text-center space-y-3 max-w-xs">
-        <div className="w-14 h-14 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto">
-          <Database className="w-7 h-7 text-blue-400" />
-        </div>
-        <h2 className="text-base font-semibold text-foreground">Select a table</h2>
-        <p className="text-sm text-muted-foreground">
-          Choose a table from the sidebar to explore your data and traverse relationships.
-        </p>
       </div>
     </div>
   )
@@ -548,10 +508,7 @@ export default function VisualizePage() {
         <div className="text-center space-y-2">
           <AlertCircle className="w-8 h-8 text-red-400 mx-auto" />
           <p className="text-sm text-red-400">{queryError}</p>
-          <button
-            onClick={() => mockQueryTable(selectedTable!)}
-            className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto"
-          >
+          <button onClick={() => queryTable(selectedTable!, page, orderBy)} className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto">
             <RefreshCw className="w-3 h-3" /> Retry
           </button>
         </div>
@@ -562,7 +519,7 @@ export default function VisualizePage() {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center space-y-2">
           <Rows3 className="w-8 h-8 text-muted-foreground mx-auto" />
-          <p className="text-sm text-muted-foreground">No rows to display</p>
+          <p className="text-sm text-muted-foreground">No rows found</p>
         </div>
       </div>
     )
@@ -575,19 +532,16 @@ export default function VisualizePage() {
               {queryResult.columns.map(col => {
                 const colSchema = currentTableSchema?.columns.find(c => c.name === col)
                 const isOrdered = orderBy?.column === col
-                const rel = findRelation(col, relations)
+                const fkRel     = findFkRelation(col, relations)
                 return (
                   <th key={col} className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group">
-                    <button
-                      onClick={() => handleSort(col)}
-                      className="flex items-center gap-1.5 hover:text-blue-400 transition-colors"
-                    >
+                    <button onClick={() => handleSort(col)} className="flex items-center gap-1.5 hover:text-blue-400 transition-colors">
                       {colSchema?.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400 shrink-0" />}
-                      {rel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
+                      {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
                       <span>{col}</span>
                       {isOrdered
                         ? orderBy?.direction === 'asc'
-                          ? <SortAsc className="w-3 h-3 text-blue-400" />
+                          ? <SortAsc  className="w-3 h-3 text-blue-400" />
                           : <SortDesc className="w-3 h-3 text-blue-400" />
                         : <SortAsc className="w-3 h-3 opacity-0 group-hover:opacity-30 transition-opacity" />
                       }
@@ -595,8 +549,6 @@ export default function VisualizePage() {
                   </th>
                 )
               })}
-
-              {/* Relations column header */}
               {relations.length > 0 && (
                 <th className="px-4 py-2.5 text-left text-xs text-muted-foreground font-semibold whitespace-nowrap">
                   Relations
@@ -604,26 +556,22 @@ export default function VisualizePage() {
               )}
             </tr>
           </thead>
-
           <tbody>
             {filteredRows.map((row, ri) => {
-              const pkCol    = currentTableSchema?.columns.find(c => c.isPrimaryKey)
-              const pkValue  = pkCol ? row[pkCol.name] : null
+              const pkCol   = currentTableSchema?.columns.find(c => c.isPrimaryKey)
+              const pkValue = pkCol ? row[pkCol.name] : null
               return (
-                <tr
-                  key={ri}
-                  className="border-b border-border/50 hover:bg-blue-500/5 transition-colors"
-                >
+                <tr key={ri} className="border-b border-border/50 hover:bg-blue-500/5 transition-colors">
                   {queryResult.columns.map(col => {
-                    const val = row[col]
-                    const rel = findRelation(col, relations)
+                    const val   = row[col]
+                    const fkRel = findFkRelation(col, relations)
                     return (
                       <td key={col} className="px-4 py-2.5 text-xs whitespace-nowrap max-w-[200px]">
                         {val === null || val === undefined ? (
                           <span className="text-muted-foreground/40 italic">null</span>
-                        ) : rel ? (
+                        ) : fkRel ? (
                           <button
-                            onClick={() => handleTraverseRelation(rel, val)}
+                            onClick={() => traverseRelation(fkRel, val, selectedTable!)}
                             className="text-blue-400 hover:underline flex items-center gap-1 transition-colors"
                           >
                             {formatCellValue(val)}
@@ -638,14 +586,13 @@ export default function VisualizePage() {
                     )
                   })}
 
-                  {/* Relation traversal buttons */}
                   {relations.length > 0 && (
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {relations.map(rel => (
+                        {dedupeRelations(relations).map((rel, relIdx) => (
                           <button
-                            key={rel.constraint}
-                            onClick={() => pkValue !== null && handleTraverseRelation(rel, pkValue)}
+                            key={`${rel.type}:${rel.toTable}:${rel.fromColumn}:${relIdx}`}
+                            onClick={() => pkValue !== null && traverseRelation(rel, pkValue, selectedTable!)}
                             className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-colors whitespace-nowrap"
                           >
                             <Link2 className="w-2.5 h-2.5" />
@@ -669,55 +616,30 @@ export default function VisualizePage() {
   ───────────────────────────────────────── */
   return (
     <div className="flex h-screen bg-background overflow-hidden">
-
-      {/* Mobile overlay */}
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 md:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-      )}
-
-      {/* Mobile sidebar drawer */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-200 ease-in-out md:hidden ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <SidebarInner />
+      <aside
+        className={`shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${
+          sidebarOpen ? 'w-64' : 'w-0 border-r-0'
+        }`}
+      >
+        <div className="w-64 h-full">
+          <SidebarInner />
+        </div>
       </aside>
 
-      {/* Desktop sidebar */}
-      <aside className={`hidden md:block shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${sidebarOpen ? 'w-64' : 'w-0 border-r-0'}`}>
-        {sidebarOpen && <SidebarInner />}
-      </aside>
-
-      {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-
-        {/* ── Top bar ── */}
+        {/* Top bar */}
         <header className="h-14 shrink-0 border-b border-border bg-card flex items-center px-4 gap-3">
-
-          {/* Sidebar toggle */}
           <button
-            onClick={() => window.innerWidth < 768
-              ? setMobileSidebarOpen(p => !p)
-              : setSidebarOpen(p => !p)
-            }
+            onClick={() => setSidebarOpen(p => !p)}
             className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0"
-            aria-label="Toggle sidebar"
           >
-            {sidebarOpen
-              ? <PanelLeftClose className="w-5 h-5" />
-              : <PanelLeftOpen  className="w-5 h-5" />
-            }
+            {sidebarOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeftOpen className="w-5 h-5" />}
           </button>
 
-          {/* Breadcrumb */}
-          <nav className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden" aria-label="Breadcrumb">
+          <nav className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
             <button
               onClick={() => { setSelectedTable(null); setBreadcrumb([]) }}
-              className={`text-xs shrink-0 transition-colors ${
-                breadcrumb.length === 0
-                  ? 'text-foreground font-semibold'
-                  : 'text-muted-foreground hover:text-blue-400'
-              }`}
+              className={`text-xs shrink-0 transition-colors ${breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
             >
               {connectionName}
             </button>
@@ -726,22 +648,15 @@ export default function VisualizePage() {
                 <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
                 <button
                   onClick={() => handleBreadcrumbClick(i)}
-                  className={`text-xs capitalize truncate transition-colors ${
-                    i === breadcrumb.length - 1
-                      ? 'text-foreground font-semibold'
-                      : 'text-muted-foreground hover:text-blue-400'
-                  }`}
+                  className={`text-xs truncate transition-colors ${i === breadcrumb.length - 1 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
                 >
                   {crumb.label}
-                  {crumb.pk !== undefined && (
-                    <span className="text-muted-foreground font-normal"> #{crumb.pk}</span>
-                  )}
+                  {crumb.pk !== undefined && <span className="text-muted-foreground font-normal"> #{crumb.pk}</span>}
                 </button>
               </div>
             ))}
           </nav>
 
-          {/* Right: row count + refresh */}
           <div className="flex items-center gap-2 shrink-0">
             {queryResult && !queryLoading && (
               <span className="text-xs text-muted-foreground hidden sm:block tabular-nums">
@@ -750,7 +665,7 @@ export default function VisualizePage() {
             )}
             {selectedTable && (
               <button
-                onClick={() => mockQueryTable(selectedTable, page, orderBy)}
+                onClick={() => queryTable(selectedTable, page, orderBy)}
                 className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
                 title="Refresh"
               >
@@ -760,7 +675,7 @@ export default function VisualizePage() {
           </div>
         </header>
 
-        {/* ── Schema toolbar (only when table selected) ── */}
+        {/* Schema toolbar */}
         {selectedTable && currentTableSchema && (
           <div className="shrink-0 border-b border-border bg-card/50 px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
@@ -771,13 +686,9 @@ export default function VisualizePage() {
                 <ColBadge key={col.name} col={col} />
               ))}
               {currentTableSchema.columns.length > 5 && (
-                <span className="text-xs text-muted-foreground">
-                  +{currentTableSchema.columns.length - 5} more
-                </span>
+                <span className="text-xs text-muted-foreground">+{currentTableSchema.columns.length - 5} more</span>
               )}
             </div>
-
-            {/* Row filter */}
             <div className="relative shrink-0">
               <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
               <input
@@ -787,10 +698,7 @@ export default function VisualizePage() {
                 className="h-7 pl-7 pr-7 text-xs bg-background border border-border rounded-lg w-36 sm:w-44 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
               />
               {rowFilter && (
-                <button
-                  onClick={() => setRowFilter('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors"
-                >
+                <button onClick={() => setRowFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
                   <X className="w-3 h-3" />
                 </button>
               )}
@@ -798,20 +706,26 @@ export default function VisualizePage() {
           </div>
         )}
 
-        {/* ── Content ── */}
+        {/* Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {!selectedTable ? (
-            <EmptyState />
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="text-center space-y-3 max-w-xs">
+                <div className="w-14 h-14 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto">
+                  <Database className="w-7 h-7 text-blue-400" />
+                </div>
+                <h2 className="text-base font-semibold text-foreground">Select a table</h2>
+                <p className="text-sm text-muted-foreground">
+                  Choose a table from the sidebar to explore your data and traverse relationships.
+                </p>
+              </div>
+            </div>
           ) : (
             <>
               <DataTable />
-
-              {/* Pagination */}
               {queryResult && queryResult.rows.length > 0 && (
                 <div className="shrink-0 border-t border-border px-4 py-2.5 flex items-center justify-between bg-card">
-                  <span className="text-xs text-muted-foreground">
-                    Page {page + 1} · {PAGE_SIZE} per page
-                  </span>
+                  <span className="text-xs text-muted-foreground">Page {page + 1} · {PAGE_SIZE} per page</span>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handlePage(-1)}
@@ -832,6 +746,52 @@ export default function VisualizePage() {
               )}
             </>
           )}
+        </div>
+
+        {/* Bottom status bar */}
+        <div className="shrink-0 h-7 border-t border-border bg-card/80 px-4 flex items-center gap-4 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 shrink-0">
+            <Database className="w-3 h-3" />
+            <span className="font-medium text-foreground">{connectionName}</span>
+          </span>
+
+          {selectedTable && (
+            <>
+              <span className="text-border">·</span>
+              <span className="flex items-center gap-1">
+                <Table2 className="w-3 h-3" />
+                {selectedTable}
+                {currentTableSchema && (
+                  <span className="text-muted-foreground/60">({currentTableSchema.columns.length} cols)</span>
+                )}
+              </span>
+            </>
+          )}
+
+          {queryResult && !queryLoading && selectedTable && (
+            <>
+              <span className="text-border">·</span>
+              <span>{filteredRows.length} row{filteredRows.length !== 1 ? 's' : ''}</span>
+            </>
+          )}
+
+          {relations.length > 0 && selectedTable && (
+            <>
+              <span className="text-border">·</span>
+              <span className="flex items-center gap-1">
+                <Link2 className="w-3 h-3" />
+                {dedupeRelations(relations).length} relation{dedupeRelations(relations).length !== 1 ? 's' : ''}
+              </span>
+            </>
+          )}
+
+          <span className="ml-auto">
+            {queryLoading && (
+              <span className="flex items-center gap-1 text-blue-400">
+                <Loader2 className="w-3 h-3 animate-spin" /> loading...
+              </span>
+            )}
+          </span>
         </div>
       </div>
     </div>

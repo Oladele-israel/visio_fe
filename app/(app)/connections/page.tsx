@@ -337,7 +337,12 @@ function DeleteModal({
           <label className="text-xs text-muted-foreground">
             Type <span className="font-semibold text-foreground select-all cursor-text">{expectedName}</span> to confirm
           </label>
-
+          {/* DEBUG — remove after confirming delete works */}
+          {process.env.NODE_ENV === 'development' && (
+            <p className="text-[10px] text-muted-foreground/50 font-mono break-all">
+              expected: [{expectedName}] ({expectedName.length} chars) | typed: [{typedName}] ({typedName.length} chars)
+            </p>
+          )}
           <Input
             placeholder={expectedName}
             value={confirmText}
@@ -494,6 +499,7 @@ export default function ConnectionsPage() {
       const sessionId = res.data?.sessionId ?? res.data?.session_id ?? res.data?.data?.sessionId
       if (sessionId) {
         sessionStorage.setItem('db-session-id', sessionId)
+        sessionStorage.setItem('db-session-connection-id', conn.id)
         api.defaults.headers.common['X-Session-Id'] = sessionId
       }
 
