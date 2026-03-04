@@ -44,13 +44,10 @@ export default function LoginPage() {
 
     try {
       setIsLoading(true)
-
       await login(formData.email, formData.password)
-
       router.replace('/dashboard')
-
     } catch (err: any) {
-      setError(err?.message || "login failed")
+      setError(err?.message || 'Login failed')
     } finally {
       setIsLoading(false)
     }
@@ -84,10 +81,8 @@ export default function LoginPage() {
             <label className="text-sm font-medium text-foreground mb-1.5 block">
               Email
             </label>
-
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
               <Input
                 type="email"
                 name="email"
@@ -102,15 +97,21 @@ export default function LoginPage() {
 
           {/* Password */}
           <div>
-            <label className="text-sm font-medium text-foreground mb-1.5 block">
-              Password
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Password
+              </label>
+              {/* ── Forgot password link ── */}
+              <Link
+                href="/forgotPassword"
+                className="text-xs text-blue-400 hover:underline transition-colors"
+              >
+                Forgot password?
+              </Link>
+            </div>
 
             <div className="relative">
-              {/* Left Lock Icon */}
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-
-              {/* Input */}
               <Input
                 type={showPassword ? 'text' : 'password'}
                 name="password"
@@ -120,8 +121,6 @@ export default function LoginPage() {
                 className="pl-10 pr-10"
                 disabled={isLoading}
               />
-
-              {/* Eye Toggle */}
               <button
                 type="button"
                 onClick={() => setShowPassword(prev => !prev)}
@@ -129,11 +128,7 @@ export default function LoginPage() {
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                 disabled={isLoading}
               >
-                {showPassword ? (
-                  <EyeOff className="w-4 h-4" />
-                ) : (
-                  <Eye className="w-4 h-4" />
-                )}
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
           </div>
