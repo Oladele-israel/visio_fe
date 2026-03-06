@@ -1,3 +1,4 @@
+// app/connections/[id]/visualize/page.tsx
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -13,14 +14,16 @@ import {
   Link as LucideLink,
 } from 'lucide-react'
 
-/* ─────────────────────────────────────────
-   TYPES — match backend response shapes exactly
-───────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   TYPES
+───────────────────────────────────────────────────────────────────────────── */
 interface Column {
   name: string
   dataType: string
   isNullable: boolean
   isPrimaryKey: boolean
+  isUnique: boolean
+  isIdentifier: boolean   // backend-computed: PK or (unique + not nullable)
 }
 
 interface Table {
@@ -37,22 +40,70 @@ interface Relation {
   constraint: string
 }
 
+// Backend always returns { success, data: { columns, rows, total } }
 interface QueryResult {
   columns: string[]
   rows: Record<string, any>[]
+  total: number
+}
+
+interface TraversalContext {
+  relationType: 'belongsTo' | 'hasMany'
+  sourceTable: string
+  sourceColumn: string
+  sourceValue: string | number
+  targetTable: string
+  targetColumn: string
 }
 
 interface BreadcrumbItem {
   table: string
   label: string
-  pk?: string | number
+  traversalContext?: TraversalContext
 }
 
 const PAGE_SIZE = 20
 
-/* ─────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────────────────────
+   RESPONSE UNWRAPPERS
+   Backend always wraps: { success: true, data: <payload> }
+   These helpers extract the payload safely regardless of nesting.
+───────────────────────────────────────────────────────────────────────────── */
+
+/** Unwrap { success, data: Table[] } or plain Table[] */
+function unwrapSchema(res: any): Table[] {
+  const raw = res?.data?.data ?? res?.data
+  return Array.isArray(raw) ? raw : []
+}
+
+/** Unwrap { success, data: { table, relations: Relation[] } } */
+function unwrapRelations(res: any): Relation[] {
+  return (
+    res?.data?.data?.relations ??
+    res?.data?.relations ??
+    []
+  )
+}
+
+/** Unwrap { success, data: { columns, rows, total } } */
+function unwrapQueryResult(res: any): QueryResult | null {
+  const payload = res?.data?.data ?? res?.data
+  if (!payload || !Array.isArray(payload.rows)) return null
+  return {
+    columns: payload.columns ?? [],
+    rows:    payload.rows,
+    total:   payload.total ?? 0,
+  }
+}
+
+/** Unwrap connection name from { data: { name } } or { name } */
+function unwrapConnectionName(res: any): string | null {
+  return res?.data?.data?.name ?? res?.data?.name ?? null
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    HELPERS
-───────────────────────────────────────── */
+───────────────────────────────────────────────────────────────────────────── */
 function typeIcon(dataType: string) {
   if (/int|serial|numeric|float|double|decimal/.test(dataType))
     return <Hash className="w-3 h-3 text-blue-400" />
@@ -60,7 +111,11 @@ function typeIcon(dataType: string) {
     return <ToggleLeft className="w-3 h-3 text-emerald-400" />
   if (/timestamp|date|time/.test(dataType))
     return <Calendar className="w-3 h-3 text-violet-400" />
-  return <span className="w-3 h-3 flex items-center justify-center text-muted-foreground text-[10px] font-bold">T</span>
+  return (
+    <span className="w-3 h-3 flex items-center justify-center text-muted-foreground text-[10px] font-bold">
+      T
+    </span>
+  )
 }
 
 function formatCellValue(val: any): string {
@@ -68,6 +123,31 @@ function formatCellValue(val: any): string {
   if (typeof val === 'boolean') return val ? 'true' : 'false'
   if (typeof val === 'object') return JSON.stringify(val)
   return String(val)
+}
+
+/**
+ * Returns the column + value that best identifies a row.
+ * Priority: isPrimaryKey → isIdentifier → column named "id"/"uuid"
+ * Returns null if no identifier found — callers disable traversal in that case.
+ */
+function resolveRowId(
+  row: Record<string, any>,
+  columns: Column[] | undefined,
+): { column: string; value: string | number } | null {
+  if (!columns) return null
+
+  const pk = columns.find(c => c.isPrimaryKey)
+  if (pk && row[pk.name] != null) return { column: pk.name, value: row[pk.name] }
+
+  const identifier = columns.find(c => c.isIdentifier && row[c.name] != null)
+  if (identifier) return { column: identifier.name, value: row[identifier.name] }
+
+  const fallback = columns.find(
+    c => ['id', 'uuid'].includes(c.name.toLowerCase()) && row[c.name] != null,
+  )
+  if (fallback) return { column: fallback.name, value: row[fallback.name] }
+
+  return null
 }
 
 function findFkRelation(colName: string, relations: Relation[]): Relation | undefined {
@@ -84,25 +164,29 @@ function dedupeRelations(relations: Relation[]): Relation[] {
   })
 }
 
-/* ─────────────────────────────────────────
-   COLUMN BADGE
-───────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   COLUMN BADGE  (stable — defined outside component to avoid remount)
+───────────────────────────────────────────────────────────────────────────── */
 function ColBadge({ col }: { col: Column }) {
   return (
     <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-background border border-border text-xs">
-      {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
+      {col.isPrimaryKey
+        ? <Key className="w-3 h-3 text-yellow-400 shrink-0" />
+        : typeIcon(col.dataType)}
       <span className="font-medium text-foreground truncate max-w-[90px]">{col.name}</span>
       <span className="text-[10px] text-muted-foreground hidden sm:inline truncate max-w-[70px]">
         {col.dataType.split('(')[0].replace(' without time zone', '')}
       </span>
-      {!col.isNullable && <span className="text-[9px] font-bold text-orange-400 ml-0.5">NN</span>}
+      {!col.isNullable && (
+        <span className="text-[9px] font-bold text-orange-400 ml-0.5">NN</span>
+      )}
     </div>
   )
 }
 
-/* ─────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────────────────────
    MAIN PAGE
-───────────────────────────────────────── */
+───────────────────────────────────────────────────────────────────────────── */
 export default function VisualizePage() {
   const params       = useParams()
   const router       = useRouter()
@@ -118,12 +202,12 @@ export default function VisualizePage() {
   const [connectionName, setConnectionName] = useState(`Connection ${connectionId}`)
 
   /* ── Table data ── */
-  const [selectedTable, setSelectedTable] = useState<string | null>(null)
-  const [relations,     setRelations]     = useState<Relation[]>([])
-  const [queryResult,   setQueryResult]   = useState<QueryResult | null>(null)
-  const [queryLoading,  setQueryLoading]  = useState(false)
-  const [queryError,    setQueryError]    = useState<string | null>(null)
-  const [breadcrumb,    setBreadcrumb]    = useState<BreadcrumbItem[]>([])
+  const [selectedTable,  setSelectedTable]  = useState<string | null>(null)
+  const [relations,      setRelations]      = useState<Relation[]>([])
+  const [queryResult,    setQueryResult]    = useState<QueryResult | null>(null)
+  const [queryLoading,   setQueryLoading]   = useState(false)
+  const [queryError,     setQueryError]     = useState<string | null>(null)
+  const [breadcrumb,     setBreadcrumb]     = useState<BreadcrumbItem[]>([])
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
 
   /* ── Controls ── */
@@ -132,56 +216,66 @@ export default function VisualizePage() {
   const [page,        setPage]        = useState(0)
   const [orderBy,     setOrderBy]     = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
 
-  /* ─────────────────────────────────────
+  /* ─────────────────────────────────────────────────────────────────────────
      SESSION BOOTSTRAP
      
-     FIX: We now return the sessionId so callers can use it immediately
-     rather than relying on axios defaults being set in time.
-     We also clear any stale session data tied to a different connectionId
-     so we never send a sessionId that belongs to a different database.
-  ───────────────────────────────────── */
-  const establishSession = useCallback(async (): Promise<string | null> => {
-    // FIX: Clear stale session if it belongs to a different connection
-    const storedConnectionId = sessionStorage.getItem('db-session-connection-id')
-    if (storedConnectionId !== connectionId) {
-      sessionStorage.removeItem('db-session-id')
-      sessionStorage.removeItem('db-session-connection-id')
-      delete api.defaults.headers.common['X-Session-Id']
-    }
+     FIX: Reuse the cached sessionId when it belongs to the current connection.
+     The old code always called /connect regardless, creating a new agent-side
+     session on every page load or React StrictMode double-render.
+     
+     Only call /connect when:
+       - No sessionId is stored at all, OR
+       - The stored sessionId belongs to a different connectionId
+  ───────────────────────────────────────────────────────────────────────── */
+const sessionBootstrapCache = new Map<string, Promise<string | null>>()
 
-    try {
-      const connectRes = await api.post(`/db-agent/${connectionId}/connect`)
-      const sessionId =
-        connectRes.data?.sessionId ??
-        connectRes.data?.session_id ??
-        connectRes.data?.data?.sessionId ?? null
+// Then inside establishSession, wrap the /connect call:
+const establishSession = useCallback(async (): Promise<string | null> => {
+  const storedConnectionId = sessionStorage.getItem('db-session-connection-id')
+  const storedSessionId    = sessionStorage.getItem('db-session-id')
+
+  if (storedConnectionId === connectionId && storedSessionId) {
+    api.defaults.headers.common['X-Session-Id'] = storedSessionId
+    return storedSessionId
+  }
+
+  // Return existing in-flight request if one is already running for this connectionId
+  if (sessionBootstrapCache.has(connectionId)) {
+    return sessionBootstrapCache.get(connectionId)!
+  }
+
+  sessionStorage.removeItem('db-session-id')
+  sessionStorage.removeItem('db-session-connection-id')
+  delete api.defaults.headers.common['X-Session-Id']
+
+  const promise = api.post(`/db-agent/${connectionId}/connect`)
+    .then(res => {
+      const sessionId: string | null =
+        res.data?.sessionId ??
+        res.data?.data?.sessionId ??
+        null
 
       if (sessionId) {
         sessionStorage.setItem('db-session-id', sessionId)
         sessionStorage.setItem('db-session-connection-id', connectionId)
-        // FIX: Set header synchronously before any subsequent calls
         api.defaults.headers.common['X-Session-Id'] = sessionId
       }
 
       return sessionId
-    } catch (err: any) {
-      return null
-    }
-  }, [connectionId])
+    })
+    .catch(() => null)
+    .finally(() => {
+      // Clear the in-flight entry once settled so future reconnects work normally
+      sessionBootstrapCache.delete(connectionId)
+    })
 
-  /* ─────────────────────────────────────
-     API CALL 1 — GET /db-agent/:id/schema
+  sessionBootstrapCache.set(connectionId, promise)
+  return promise
+}, [connectionId])
 
-     FIX: establishSession() must fully resolve before schema fetch.
-     Previously these ran concurrently via Promise.all which meant the
-     schema request could fire before the new X-Session-Id header was set,
-     causing the backend to serve schema for the wrong (or cached) session.
-
-     FIX: We also explicitly invalidate the schema cache on the backend
-     before fetching fresh schema, so switching databases always returns
-     the correct database's tables — not a cached version from the
-     previous connection's session.
-  ───────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     LOAD SCHEMA
+  ───────────────────────────────────────────────────────────────────────── */
   const loadSchema = useCallback(async () => {
     setSchemaLoading(true)
     setSchemaError(null)
@@ -189,9 +283,7 @@ export default function VisualizePage() {
     setSelectedTable(null)
     setBreadcrumb([])
 
-    // FIX: Await session fully before any schema/query calls
     const sessionId = await establishSession()
-
     if (!sessionId) {
       setSchemaError('Failed to establish session. Check connection settings.')
       setSchemaLoading(false)
@@ -199,21 +291,15 @@ export default function VisualizePage() {
     }
 
     try {
-      // Cache invalidation is handled by the backend in connectUserDbConnection()
-      // before every new session is created — no need to call it here.
       const [schemaRes, connRes] = await Promise.all([
-        api.get(`/db-agent/${connectionId}/schema`, {
-          headers: { 'X-Session-Id': sessionId },
-        }),
+        api.get(`/db-agent/${connectionId}/schema`),
         api.get(`/db-agent/${connectionId}`).catch(() => null),
       ])
 
-      const tables: Table[] = Array.isArray(schemaRes.data)
-        ? schemaRes.data
-        : (schemaRes.data?.data ?? [])
-      setSchema(tables)
+      // FIX: use dedicated unwrapper — backend wraps in { success, data: [...] }
+      setSchema(unwrapSchema(schemaRes))
 
-      const name = connRes?.data?.data?.name ?? connRes?.data?.name
+      const name = unwrapConnectionName(connRes)
       if (name) setConnectionName(name)
     } catch (err: any) {
       setSchemaError(err?.response?.data?.message ?? 'Failed to load schema')
@@ -222,8 +308,6 @@ export default function VisualizePage() {
     }
   }, [connectionId, establishSession])
 
-  // FIX: Reset all table/query state when connectionId changes so stale
-  // data from the previous database is never displayed on the new one.
   useEffect(() => {
     setSelectedTable(null)
     setQueryResult(null)
@@ -234,28 +318,23 @@ export default function VisualizePage() {
     setRowFilter('')
     loadSchema()
   }, [connectionId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // NOTE: intentionally not including loadSchema in deps — connectionId
-  // change is the only trigger we want here to avoid double-fetching.
 
-  /* ─────────────────────────────────────
-     API CALL 2 — GET /db-agent/:id/relation/:table
-  ───────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     LOAD RELATIONS
+  ───────────────────────────────────────────────────────────────────────── */
   const loadRelations = useCallback(async (tableName: string) => {
     try {
       const res = await api.get(`/db-agent/${connectionId}/relation/${tableName}`)
-      const rels: Relation[] =
-        res.data?.data?.relations ??
-        res.data?.relations ??
-        []
-      setRelations(rels)
+      // FIX: backend returns { success, data: { table, relations: [...] } }
+      setRelations(unwrapRelations(res))
     } catch {
       setRelations([])
     }
   }, [connectionId])
 
-  /* ─────────────────────────────────────
-     API CALL 3 — POST /db-agent/:id/:table/query
-  ───────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     QUERY TABLE ROWS
+  ───────────────────────────────────────────────────────────────────────── */
   const queryTable = useCallback(async (
     tableName: string,
     pg = 0,
@@ -269,49 +348,105 @@ export default function VisualizePage() {
         offset: pg * PAGE_SIZE,
         ...(ob ? { orderBy: { column: ob.column, direction: ob.direction } } : {}),
       })
-      const result: QueryResult = res.data?.data ?? res.data
+      // FIX: backend returns { success, data: { columns, rows, total } }
+      const result = unwrapQueryResult(res)
+      if (!result) throw new Error('Unexpected response shape from query endpoint')
       setQueryResult(result)
     } catch (err: any) {
-      setQueryError(err?.response?.data?.message ?? 'Failed to load rows')
+      setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to load rows')
       setQueryResult(null)
     } finally {
       setQueryLoading(false)
     }
   }, [connectionId])
 
-  /* ─────────────────────────────────────
-     API CALL 4 — POST /db-agent/:id/relations/query
-  ───────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     TRAVERSE RELATION
+     
+     belongsTo → read FK value from current row
+                 e.g. transaction.user_id = 5 → SELECT * FROM users WHERE id = 5
+     
+     hasMany   → read parent identifier from current row
+                 e.g. user.id = 5 → SELECT * FROM transactions WHERE user_id = 5
+  ───────────────────────────────────────────────────────────────────────── */
   const traverseRelation = useCallback(async (
     rel: Relation,
-    pkValue: string | number,
+    row: Record<string, any>,
     currentTable: string,
+    currentTableColumns: Column[] | undefined,
   ) => {
     setQueryLoading(true)
     setQueryError(null)
+
     try {
-      const res = await api.post(`/db-agent/${connectionId}/relations/query`, {
-        sourceTable: currentTable,
-        sourceWhere: { [rel.fromColumn]: pkValue },
-        targetTable: rel.toTable,
+      let sourceColumn: string
+      let sourceValue: string | number
+
+      if (rel.type === 'belongsTo') {
+        sourceColumn = rel.fromColumn
+        sourceValue  = row[rel.fromColumn]
+        if (sourceValue == null) {
+          setQueryError(`FK column "${rel.fromColumn}" is null — cannot traverse`)
+          setQueryLoading(false)
+          return
+        }
+      } else {
+        const rowId = resolveRowId(row, currentTableColumns)
+        if (!rowId) {
+          setQueryError('Cannot determine row identifier for hasMany traversal')
+          setQueryLoading(false)
+          return
+        }
+        sourceColumn = rowId.column
+        sourceValue  = rowId.value
+      }
+
+      const res = await api.post(`/db-agent/${connectionId}/query/relation/traverse`, {
+        sourceTable:  currentTable,
+        sourceColumn,
+        sourceValue,
+        relationType: rel.type,
+        targetTable:  rel.toTable,
+        targetColumn: rel.toColumn,
+        limit:        PAGE_SIZE,
+        offset:       0,
       })
-      const result: QueryResult = res.data?.data ?? res.data
+
+      // FIX: backend wraps in { success, data: { columns, rows, total } }
+      const result = unwrapQueryResult(res)
+      if (!result) throw new Error('Unexpected response shape from traverse endpoint')
+
       setQueryResult(result)
       setSelectedTable(rel.toTable)
-      setBreadcrumb(prev => [...prev, {
-        table: rel.toTable,
-        label: rel.toTable,
-        pk: pkValue,
-      }])
+      setPage(0)
+      setOrderBy(null)
       await loadRelations(rel.toTable)
+
+      setBreadcrumb(prev => [
+        ...prev,
+        {
+          table: rel.toTable,
+          label: rel.toTable,
+          traversalContext: {
+            relationType: rel.type,
+            sourceTable:  currentTable,
+            sourceColumn,
+            sourceValue,
+            targetTable:  rel.toTable,
+            targetColumn: rel.toColumn,
+          },
+        },
+      ])
     } catch (err: any) {
-      setQueryError(err?.response?.data?.message ?? 'Failed to traverse relation')
+      setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to traverse relation')
     } finally {
       setQueryLoading(false)
     }
   }, [connectionId, loadRelations])
 
-  /* ── Select table ── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     SELECT TABLE FROM SIDEBAR
+  ───────────────────────────────────────────────────────────────────────── */
   const handleSelectTable = useCallback(async (table: string) => {
     setSelectedTable(table)
     setBreadcrumb([{ table, label: table }])
@@ -321,21 +456,52 @@ export default function VisualizePage() {
     await Promise.all([queryTable(table, 0, null), loadRelations(table)])
   }, [queryTable, loadRelations])
 
-  /* ── Breadcrumb ── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     BREADCRUMB NAVIGATION
+  ───────────────────────────────────────────────────────────────────────── */
   const handleBreadcrumbClick = useCallback(async (index: number) => {
-    const crumb = breadcrumb[index]
-    setBreadcrumb(breadcrumb.slice(0, index + 1))
+    const crumb   = breadcrumb[index]
+    const trimmed = breadcrumb.slice(0, index + 1)
+    setBreadcrumb(trimmed)
     setSelectedTable(crumb.table)
     setPage(0)
     setOrderBy(null)
-    await Promise.all([queryTable(crumb.table, 0, null), loadRelations(crumb.table)])
-  }, [breadcrumb, queryTable, loadRelations])
+
+    if (crumb.traversalContext) {
+      const ctx = crumb.traversalContext
+      setQueryLoading(true)
+      setQueryError(null)
+      try {
+        const res = await api.post(`/db-agent/${connectionId}/query/relation/traverse`, {
+          sourceTable:  ctx.sourceTable,
+          sourceColumn: ctx.sourceColumn,
+          sourceValue:  ctx.sourceValue,
+          relationType: ctx.relationType,
+          targetTable:  ctx.targetTable,
+          targetColumn: ctx.targetColumn,
+          limit:        PAGE_SIZE,
+          offset:       0,
+        })
+        const result = unwrapQueryResult(res)
+        if (!result) throw new Error('Unexpected response shape')
+        setQueryResult(result)
+      } catch (err: any) {
+        setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to navigate back')
+      } finally {
+        setQueryLoading(false)
+      }
+      await loadRelations(crumb.table)
+    } else {
+      await Promise.all([queryTable(crumb.table, 0, null), loadRelations(crumb.table)])
+    }
+  }, [breadcrumb, connectionId, queryTable, loadRelations])
 
   /* ── Sort ── */
   const handleSort = useCallback((col: string) => {
-    const next = orderBy?.column === col && orderBy.direction === 'asc'
-      ? { column: col, direction: 'desc' as const }
-      : { column: col, direction: 'asc'  as const }
+    const next =
+      orderBy?.column === col && orderBy.direction === 'asc'
+        ? { column: col, direction: 'desc' as const }
+        : { column: col, direction: 'asc'  as const }
     setOrderBy(next)
     queryTable(selectedTable!, page, next)
   }, [orderBy, page, selectedTable, queryTable])
@@ -347,17 +513,18 @@ export default function VisualizePage() {
     queryTable(selectedTable!, next, orderBy)
   }, [page, selectedTable, orderBy, queryTable])
 
-  const toggleExpand = (tableName: string) =>
+  const toggleExpand = useCallback((tableName: string) => {
     setExpandedTables(prev => {
       const next = new Set(prev)
       next.has(tableName) ? next.delete(tableName) : next.add(tableName)
       return next
     })
+  }, [])
 
   /* ── Derived ── */
-  const filteredSchema = useMemo(() =>
-    schema.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase())),
-    [schema, tableSearch]
+  const filteredSchema = useMemo(
+    () => schema.filter(t => t.name.toLowerCase().includes(tableSearch.toLowerCase())),
+    [schema, tableSearch],
   )
 
   const filteredRows = useMemo(() => {
@@ -365,268 +532,162 @@ export default function VisualizePage() {
     if (!rowFilter.trim()) return queryResult.rows
     const q = rowFilter.toLowerCase()
     return queryResult.rows.filter(row =>
-      Object.values(row).some(v => String(v ?? '').toLowerCase().includes(q))
+      Object.values(row).some(v => String(v ?? '').toLowerCase().includes(q)),
     )
   }, [queryResult, rowFilter])
 
-  const currentTableSchema = useMemo(() =>
-    schema.find(t => t.name === selectedTable),
-    [schema, selectedTable]
+  const currentTableSchema = useMemo(
+    () => schema.find(t => t.name === selectedTable),
+    [schema, selectedTable],
   )
 
-  /* ─────────────────────────────────────────
-     SIDEBAR
-  ───────────────────────────────────────── */
-  const SidebarInner = () => (
-    <div className="h-full flex flex-col bg-card">
-      <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
-        <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-sm shrink-0">
-          <LucideLink className="w-4 h-4 text-primary-foreground" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-foreground truncate">DBViz</p>
-          <p className="text-[10px] text-muted-foreground truncate">{connectionName}</p>
-        </div>
-      </div>
+  const hasNextPage = queryResult
+    ? (page + 1) * PAGE_SIZE < queryResult.total
+    : false
 
-      {/* Search */}
-      <div className="px-3 pt-3 pb-2 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            placeholder="Search tables..."
-            value={tableSearch}
-            onChange={e => setTableSearch(e.target.value)}
-            className="w-full h-8 pl-8 pr-7 text-xs bg-background border border-border rounded-lg focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
-          />
-          {tableSearch && (
-            <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Count */}
-      <div className="px-5 pb-1 shrink-0">
-        {schemaLoading ? (
-          <div className="h-3 w-16 bg-border rounded animate-pulse" />
-        ) : (
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
-          </p>
-        )}
-      </div>
-
-      {schemaError && !schemaLoading && (
-        <div className="mx-3 mb-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <div>
-            <p>{schemaError}</p>
-            <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">Retry</button>
-          </div>
-        </div>
-      )}
-
-      {schemaLoading && (
-        <div className="px-3 space-y-1 flex-1">
-          {[1,2,3,4,5].map(i => (
-            <div key={i} className="flex items-center gap-2 px-2 py-2 animate-pulse">
-              <div className="w-3 h-3 bg-border rounded" />
-              <div className="h-3 bg-border rounded" style={{ width: `${50 + i * 8}%` }} />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!schemaLoading && (
-        <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
-          {filteredSchema.map(table => {
-            const isSelected = selectedTable === table.name
-            const isExpanded = expandedTables.has(table.name)
-            return (
-              <div key={table.name}>
-                <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
-                  <button onClick={() => toggleExpand(table.name)} className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0">
-                    {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                  </button>
-                  <button
-                    onClick={() => handleSelectTable(table.name)}
-                    className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${
-                      isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'
-                    }`}
-                  >
-                    <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{table.name}</span>
-                    <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">{table.columns.length}</span>
-                  </button>
-                </div>
-                {isExpanded && (
-                  <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border space-y-0.5">
-                    {table.columns.map(col => (
-                      <div key={col.name} className="flex items-center gap-1.5 py-0.5">
-                        {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
-                        <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">{col.name}</span>
-                        <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
-                          {col.dataType.split('(')[0].replace(' without time zone', '')}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <div className="border-t border-border p-3 shrink-0">
-        <button
-          onClick={() => router.push('/connections')}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-        >
-          <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
-          Back to Connections
-        </button>
-      </div>
-    </div>
-  )
-
-  /* ─────────────────────────────────────────
-     DATA TABLE
-  ───────────────────────────────────────── */
-  const DataTable = () => {
-    if (queryLoading) return (
-      <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
-        <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-        <span className="text-sm">Loading rows...</span>
-      </div>
-    )
-
-    if (queryError) return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="text-center space-y-2">
-          <AlertCircle className="w-8 h-8 text-red-400 mx-auto" />
-          <p className="text-sm text-red-400">{queryError}</p>
-          <button onClick={() => queryTable(selectedTable!, page, orderBy)} className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto">
-            <RefreshCw className="w-3 h-3" /> Retry
-          </button>
-        </div>
-      </div>
-    )
-
-    if (!queryResult || filteredRows.length === 0) return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center space-y-2">
-          <Rows3 className="w-8 h-8 text-muted-foreground mx-auto" />
-          <p className="text-sm text-muted-foreground">No rows found</p>
-        </div>
-      </div>
-    )
-
-    return (
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-sm border-collapse min-w-max">
-          <thead className="sticky top-0 z-10 bg-card border-b border-border">
-            <tr>
-              {queryResult.columns.map(col => {
-                const colSchema = currentTableSchema?.columns.find(c => c.name === col)
-                const isOrdered = orderBy?.column === col
-                const fkRel     = findFkRelation(col, relations)
-                return (
-                  <th key={col} className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group">
-                    <button onClick={() => handleSort(col)} className="flex items-center gap-1.5 hover:text-blue-400 transition-colors">
-                      {colSchema?.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400 shrink-0" />}
-                      {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
-                      <span>{col}</span>
-                      {isOrdered
-                        ? orderBy?.direction === 'asc'
-                          ? <SortAsc  className="w-3 h-3 text-blue-400" />
-                          : <SortDesc className="w-3 h-3 text-blue-400" />
-                        : <SortAsc className="w-3 h-3 opacity-0 group-hover:opacity-30 transition-opacity" />
-                      }
-                    </button>
-                  </th>
-                )
-              })}
-              {relations.length > 0 && (
-                <th className="px-4 py-2.5 text-left text-xs text-muted-foreground font-semibold whitespace-nowrap">
-                  Relations
-                </th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRows.map((row, ri) => {
-              const pkCol   = currentTableSchema?.columns.find(c => c.isPrimaryKey)
-              const pkValue = pkCol ? row[pkCol.name] : null
-              return (
-                <tr key={ri} className="border-b border-border/50 hover:bg-blue-500/5 transition-colors">
-                  {queryResult.columns.map(col => {
-                    const val   = row[col]
-                    const fkRel = findFkRelation(col, relations)
-                    return (
-                      <td key={col} className="px-4 py-2.5 text-xs whitespace-nowrap max-w-[200px]">
-                        {val === null || val === undefined ? (
-                          <span className="text-muted-foreground/40 italic">null</span>
-                        ) : fkRel ? (
-                          <button
-                            onClick={() => traverseRelation(fkRel, val, selectedTable!)}
-                            className="text-blue-400 hover:underline flex items-center gap-1 transition-colors"
-                          >
-                            {formatCellValue(val)}
-                            <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-                          </button>
-                        ) : (
-                          <span className={`text-foreground truncate block ${typeof val === 'boolean' ? (val ? 'text-emerald-400' : 'text-muted-foreground') : ''}`}>
-                            {formatCellValue(val)}
-                          </span>
-                        )}
-                      </td>
-                    )
-                  })}
-
-                  {relations.length > 0 && (
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {dedupeRelations(relations).map((rel, relIdx) => (
-                          <button
-                            key={`${rel.type}:${rel.toTable}:${rel.fromColumn}:${relIdx}`}
-                            onClick={() => pkValue !== null && traverseRelation(rel, pkValue, selectedTable!)}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-colors whitespace-nowrap"
-                          >
-                            <Link2 className="w-2.5 h-2.5" />
-                            {rel.type === 'hasMany' ? `↳ ${rel.toTable}` : `→ ${rel.toTable}`}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-
-  /* ─────────────────────────────────────────
+  /* ─────────────────────────────────────────────────────────────────────────
      RENDER
-  ───────────────────────────────────────── */
+  ───────────────────────────────────────────────────────────────────────── */
   return (
     <div className="flex h-screen bg-background overflow-hidden">
+
+      {/* ── Sidebar ────────────────────────────────────────────────────────── */}
       <aside
         className={`shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${
           sidebarOpen ? 'w-64' : 'w-0 border-r-0'
         }`}
       >
-        <div className="w-64 h-full">
-          <SidebarInner />
+        <div className="w-64 h-full flex flex-col bg-card">
+          {/* Header */}
+          <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
+            <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-sm shrink-0">
+              <LucideLink className="w-4 h-4 text-primary-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-foreground truncate">DBViz</p>
+              <p className="text-[10px] text-muted-foreground truncate">{connectionName}</p>
+            </div>
+          </div>
+
+          {/* Search */}
+          <div className="px-3 pt-3 pb-2 shrink-0">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                placeholder="Search tables..."
+                value={tableSearch}
+                onChange={e => setTableSearch(e.target.value)}
+                className="w-full h-8 pl-8 pr-7 text-xs bg-background border border-border rounded-lg focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
+              />
+              {tableSearch && (
+                <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Count */}
+          <div className="px-5 pb-1 shrink-0">
+            {schemaLoading ? (
+              <div className="h-3 w-16 bg-border rounded animate-pulse" />
+            ) : (
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
+              </p>
+            )}
+          </div>
+
+          {/* Error */}
+          {schemaError && !schemaLoading && (
+            <div className="mx-3 mb-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-start gap-2">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <div>
+                <p>{schemaError}</p>
+                <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Skeleton */}
+          {schemaLoading && (
+            <div className="px-3 space-y-1 flex-1">
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} className="flex items-center gap-2 px-2 py-2 animate-pulse">
+                  <div className="w-3 h-3 bg-border rounded" />
+                  <div className="h-3 bg-border rounded" style={{ width: `${50 + i * 8}%` }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Table list */}
+          {!schemaLoading && (
+            <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+              {filteredSchema.map(table => {
+                const isSelected = selectedTable === table.name
+                const isExpanded = expandedTables.has(table.name)
+                return (
+                  <div key={table.name}>
+                    <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
+                      <button
+                        onClick={() => toggleExpand(table.name)}
+                        className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0"
+                      >
+                        {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      </button>
+                      <button
+                        onClick={() => handleSelectTable(table.name)}
+                        className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${
+                          isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'
+                        }`}
+                      >
+                        <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{table.name}</span>
+                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">
+                          {table.columns.length}
+                        </span>
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border space-y-0.5">
+                        {table.columns.map(col => (
+                          <div key={col.name} className="flex items-center gap-1.5 py-0.5">
+                            {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
+                            <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">
+                              {col.name}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
+                              {col.dataType.split('(')[0].replace(' without time zone', '')}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Back button */}
+          <div className="border-t border-border p-3 shrink-0">
+            <button
+              onClick={() => router.push('/connections')}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+              Back to Connections
+            </button>
+          </div>
         </div>
       </aside>
 
+      {/* ── Main content ───────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
         {/* Top bar */}
         <header className="h-14 shrink-0 border-b border-border bg-card flex items-center px-4 gap-3">
           <button
@@ -639,7 +700,9 @@ export default function VisualizePage() {
           <nav className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
             <button
               onClick={() => { setSelectedTable(null); setBreadcrumb([]) }}
-              className={`text-xs shrink-0 transition-colors ${breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
+              className={`text-xs shrink-0 transition-colors ${
+                breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'
+              }`}
             >
               {connectionName}
             </button>
@@ -648,10 +711,13 @@ export default function VisualizePage() {
                 <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
                 <button
                   onClick={() => handleBreadcrumbClick(i)}
-                  className={`text-xs truncate transition-colors ${i === breadcrumb.length - 1 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
+                  className={`text-xs truncate transition-colors ${
+                    i === breadcrumb.length - 1
+                      ? 'text-foreground font-semibold'
+                      : 'text-muted-foreground hover:text-blue-400'
+                  }`}
                 >
                   {crumb.label}
-                  {crumb.pk !== undefined && <span className="text-muted-foreground font-normal"> #{crumb.pk}</span>}
                 </button>
               </div>
             ))}
@@ -660,7 +726,7 @@ export default function VisualizePage() {
           <div className="flex items-center gap-2 shrink-0">
             {queryResult && !queryLoading && (
               <span className="text-xs text-muted-foreground hidden sm:block tabular-nums">
-                {filteredRows.length} row{filteredRows.length !== 1 ? 's' : ''}
+                {queryResult.total} total
               </span>
             )}
             {selectedTable && (
@@ -686,7 +752,9 @@ export default function VisualizePage() {
                 <ColBadge key={col.name} col={col} />
               ))}
               {currentTableSchema.columns.length > 5 && (
-                <span className="text-xs text-muted-foreground">+{currentTableSchema.columns.length - 5} more</span>
+                <span className="text-xs text-muted-foreground">
+                  +{currentTableSchema.columns.length - 5} more
+                </span>
               )}
             </div>
             <div className="relative shrink-0">
@@ -722,10 +790,135 @@ export default function VisualizePage() {
             </div>
           ) : (
             <>
-              <DataTable />
+              {/* ── Data table ── */}
+              {queryLoading ? (
+                <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
+                  <span className="text-sm">Loading rows...</span>
+                </div>
+              ) : queryError ? (
+                <div className="flex-1 flex items-center justify-center p-6">
+                  <div className="text-center space-y-2">
+                    <AlertCircle className="w-8 h-8 text-red-400 mx-auto" />
+                    <p className="text-sm text-red-400">{queryError}</p>
+                    <button
+                      onClick={() => queryTable(selectedTable, page, orderBy)}
+                      className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Retry
+                    </button>
+                  </div>
+                </div>
+              ) : !queryResult || filteredRows.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center space-y-2">
+                    <Rows3 className="w-8 h-8 text-muted-foreground mx-auto" />
+                    <p className="text-sm text-muted-foreground">No rows found</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-sm border-collapse min-w-max">
+                    <thead className="sticky top-0 z-10 bg-card border-b border-border">
+                      <tr>
+                        {queryResult.columns.map(col => {
+                          const colSchema = currentTableSchema?.columns.find(c => c.name === col)
+                          const isOrdered = orderBy?.column === col
+                          const fkRel     = findFkRelation(col, relations)
+                          return (
+                            <th
+                              key={col}
+                              className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group"
+                            >
+                              <button
+                                onClick={() => handleSort(col)}
+                                className="flex items-center gap-1.5 hover:text-blue-400 transition-colors"
+                              >
+                                {colSchema?.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400 shrink-0" />}
+                                {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
+                                <span>{col}</span>
+                                {isOrdered
+                                  ? orderBy?.direction === 'asc'
+                                    ? <SortAsc  className="w-3 h-3 text-blue-400" />
+                                    : <SortDesc className="w-3 h-3 text-blue-400" />
+                                  : <SortAsc className="w-3 h-3 opacity-0 group-hover:opacity-30 transition-opacity" />
+                                }
+                              </button>
+                            </th>
+                          )
+                        })}
+                        {relations.length > 0 && (
+                          <th className="px-4 py-2.5 text-left text-xs text-muted-foreground font-semibold whitespace-nowrap">
+                            Relations
+                          </th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRows.map((row, ri) => {
+                        const rowId = resolveRowId(row, currentTableSchema?.columns)
+                        return (
+                          <tr
+                            key={ri}
+                            className="border-b border-border/50 hover:bg-blue-500/5 transition-colors"
+                          >
+                            {queryResult.columns.map(col => {
+                              const val   = row[col]
+                              const fkRel = findFkRelation(col, relations)
+                              return (
+                                <td key={col} className="px-4 py-2.5 text-xs whitespace-nowrap max-w-[200px]">
+                                  {val === null || val === undefined ? (
+                                    <span className="text-muted-foreground/40 italic">null</span>
+                                  ) : fkRel ? (
+                                    <button
+                                      onClick={() => traverseRelation(fkRel, row, selectedTable, currentTableSchema?.columns)}
+                                      className="text-blue-400 hover:underline flex items-center gap-1 transition-colors"
+                                    >
+                                      {formatCellValue(val)}
+                                      <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                                    </button>
+                                  ) : (
+                                    <span className={`text-foreground truncate block ${
+                                      typeof val === 'boolean' ? (val ? 'text-emerald-400' : 'text-muted-foreground') : ''
+                                    }`}>
+                                      {formatCellValue(val)}
+                                    </span>
+                                  )}
+                                </td>
+                              )
+                            })}
+
+                            {relations.length > 0 && (
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {dedupeRelations(relations).map((rel, relIdx) => (
+                                    <button
+                                      key={`${rel.type}:${rel.toTable}:${rel.fromColumn}:${relIdx}`}
+                                      disabled={rel.type === 'hasMany' && rowId === null}
+                                      onClick={() => traverseRelation(rel, row, selectedTable, currentTableSchema?.columns)}
+                                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-colors whitespace-nowrap disabled:opacity-30 disabled:cursor-not-allowed"
+                                    >
+                                      <Link2 className="w-2.5 h-2.5" />
+                                      {rel.type === 'hasMany' ? `↳ ${rel.toTable}` : `→ ${rel.toTable}`}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Pagination */}
               {queryResult && queryResult.rows.length > 0 && (
                 <div className="shrink-0 border-t border-border px-4 py-2.5 flex items-center justify-between bg-card">
-                  <span className="text-xs text-muted-foreground">Page {page + 1} · {PAGE_SIZE} per page</span>
+                  <span className="text-xs text-muted-foreground">
+                    Page {page + 1} · {Math.ceil(queryResult.total / PAGE_SIZE)} pages · {queryResult.total} rows
+                  </span>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handlePage(-1)}
@@ -736,7 +929,7 @@ export default function VisualizePage() {
                     </button>
                     <button
                       onClick={() => handlePage(1)}
-                      disabled={queryResult.rows.length < PAGE_SIZE || queryLoading}
+                      disabled={!hasNextPage || queryLoading}
                       className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       Next
@@ -748,13 +941,12 @@ export default function VisualizePage() {
           )}
         </div>
 
-        {/* Bottom status bar */}
+        {/* Status bar */}
         <div className="shrink-0 h-7 border-t border-border bg-card/80 px-4 flex items-center gap-4 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1.5 shrink-0">
             <Database className="w-3 h-3" />
             <span className="font-medium text-foreground">{connectionName}</span>
           </span>
-
           {selectedTable && (
             <>
               <span className="text-border">·</span>
@@ -767,14 +959,12 @@ export default function VisualizePage() {
               </span>
             </>
           )}
-
           {queryResult && !queryLoading && selectedTable && (
             <>
               <span className="text-border">·</span>
-              <span>{filteredRows.length} row{filteredRows.length !== 1 ? 's' : ''}</span>
+              <span>{queryResult.total} total rows</span>
             </>
           )}
-
           {relations.length > 0 && selectedTable && (
             <>
               <span className="text-border">·</span>
@@ -784,7 +974,6 @@ export default function VisualizePage() {
               </span>
             </>
           )}
-
           <span className="ml-auto">
             {queryLoading && (
               <span className="flex items-center gap-1 text-blue-400">
