@@ -1,89 +1,82 @@
-"use client";
+'use client'
 
-import { createContext, useContext, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { setAccessToken } from "@/lib/tokenStore";
-import { initializeAuth } from "@/lib/authInitializer";
-import { useRouter } from "next/navigation";
+import React, { createContext, useContext, useEffect, ReactNode } from 'react'
+import { useRouter }                                               from 'next/navigation'
+import { useSession, signIn, signUp, signOut }                    from './auth-client'
+import type { AuthUser }                                           from './auth'
 
-interface AuthContextType {
-  user: any;
-  loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, name: string) => Promise<void>;
-  logout: () => Promise<void>;
+interface AuthContextValue {
+  user:      AuthUser | null
+  loading:   boolean
+  isLoading: boolean
+  login:     (email: string, password: string) => Promise<void>
+  signup:    (email: string, password: string, name: string) => Promise<void>
+  logout:    () => Promise<void>
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
+const AuthContext = createContext<AuthContextValue | null>(null)
 
-export const AuthProvider = ({ children }: any) => {
-  const router = useRouter(); 
+const PUBLIC_PATHS = ['/login', '/signup', '/forgotPassword']
 
-  const [user, setUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const { data: session, isPending } = useSession()
+  const router                       = useRouter()
 
   useEffect(() => {
-    boot();
-  }, []);
+    // Only redirect once better-auth has finished loading the session
+    // isPending = true means still hydrating — don't act yet
+    if (isPending) return
 
-  const boot = async () => {
-    const user = await initializeAuth();
-    setUser(user);
-    setLoading(false);
-  };
+    const isPublic = PUBLIC_PATHS.some(p =>
+      window.location.pathname.startsWith(p)
+    )
 
-  const login = async (email: string, password: string) => {
-    try {
-      const res = await api.post("/auth/login", { email, password });
-      setAccessToken(res.data.authenticated.accessToken);
-      setUser(res.data.user);
-    } catch (err: any) {
-      throw err.response?.data || { message: "Login failed" };
+    // Session is null and we're on a protected page → go to login
+    if (!session && !isPublic) {
+      router.replace('/login')
     }
-  };
+  }, [session, isPending, router])
+
+  const login = async (email: string, password: string): Promise<void> => {
+    const res = await signIn.email({ email, password })
+    if (res.error) throw new Error(res.error.message ?? 'Login failed')
+  }
 
   const signup = async (
     email: string,
     password: string,
-    name: string
-  ) => {
-    try {
-      const res = await api.post("/auth/register", {
-        email,
-        password,
-        name,
-        role: "VIEWER",
-      });
+    name: string,
+  ): Promise<void> => {
+    const res = await signUp.email({ email, password, name })
+    if (res.error) throw new Error(res.error.message ?? 'Signup failed')
+  }
 
-      setAccessToken(res.data.authenticated.accessToken);
-      setUser(res.data.user);
-    } catch (err: any) {
-      throw err.response?.data || { message: "Login failed" };
-    }
-  };
-
-  const logout = async () => {
-    try {
-      await api.post("/auth/logout");
-    } catch (err) {
-      console.error("Logout failed", err);
-    }
-
-    setAccessToken(null);
-    setUser(null);
-
-    router.replace("/login"); 
-  };
+  const logout = async (): Promise<void> => {
+    await signOut({
+      fetchOptions: {
+        onSuccess: () => router.replace('/login'),
+      },
+    })
+  }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, signup }}>
-      {!loading && children}
+    <AuthContext.Provider
+      value={{
+        user:      session?.user ?? null,
+        loading:   isPending,
+        isLoading: isPending,
+        login,
+        signup,
+        logout,
+      }}
+    >
+      {children}
     </AuthContext.Provider>
-  );
-};
+  )
+}
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error("AuthContext missing");
-  return context;
-};
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>')
+  return ctx
+}

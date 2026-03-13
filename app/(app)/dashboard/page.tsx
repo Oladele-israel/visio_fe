@@ -1,37 +1,30 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { useAuth } from '@/lib/auth-context'
+import { useAuth }             from '@/lib/auth-context'
 import { Users, Database, Activity, AlertTriangle } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   CartesianGrid, ResponsiveContainer, Legend,
 } from 'recharts'
 
-/* ─────────────────────────────────────────
-   TYPES
-───────────────────────────────────────── */
 interface MetricPoint {
-  time: string
-  queries: number
-  activeConnections: number
-  failedQueries: number
+  time:               string
+  queries:            number
+  activeConnections:  number
+  failedQueries:      number
 }
 
 interface StatCardProps {
-  icon: React.ReactNode
-  label: string
-  value: string | number
-  sub?: string
-  iconBg: string
-  iconColor: string
+  icon:        React.ReactNode
+  label:       string
+  value:       string | number
+  sub?:        string
+  iconBg:      string
+  iconColor:   string
   valueColor?: string
 }
 
-/* ─────────────────────────────────────────
-   STAT CARD
-───────────────────────────────────────── */
 function StatCard({ icon, label, value, sub, iconBg, iconColor, valueColor }: StatCardProps) {
   return (
     <div className="bg-card border border-border rounded-xl p-5 flex items-start gap-4 hover:shadow-md transition-shadow">
@@ -47,20 +40,13 @@ function StatCard({ icon, label, value, sub, iconBg, iconColor, valueColor }: St
   )
 }
 
-/* ─────────────────────────────────────────
-   PAGE — no DashboardLayout wrapper here
-   (app)/layout.tsx handles that
-───────────────────────────────────────── */
 export default function DashboardPage() {
-  const { user, isLoading: authLoading } = useAuth()
-  const router = useRouter()
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  // No redirect logic here — middleware handles that.
+  // We just wait for isPending to settle before rendering.
+  const { user, isLoading } = useAuth()
 
-  /* Auth guard */
-  useEffect(() => {
-    if (!authLoading && !user) router.push('/login')
-  }, [user, authLoading, router])
-
-  /* Realtime metrics */
+  // ── Realtime metrics ─────────────────────────────────────────────────────
   const [metrics, setMetrics] = useState<MetricPoint[]>([])
 
   useEffect(() => {
@@ -68,33 +54,34 @@ export default function DashboardPage() {
       setMetrics(prev => [
         ...prev,
         {
-          time: new Date().toLocaleTimeString(),
-          queries: Math.floor(Math.random() * 100),
+          time:              new Date().toLocaleTimeString(),
+          queries:           Math.floor(Math.random() * 100),
           activeConnections: Math.floor(Math.random() * 10),
-          failedQueries: Math.floor(Math.random() * 5),
+          failedQueries:     Math.floor(Math.random() * 5),
         },
       ].slice(-20))
     }, 3000)
     return () => clearInterval(interval)
   }, [])
 
-  /* Mock stats — replace with real API calls */
-  const [teamCount] = useState(8)
+  // ── Mock stats ────────────────────────────────────────────────────────────
+  const [teamCount]    = useState(8)
   const [dbConnections] = useState(3)
-  const [lastRequest] = useState({
-    user: 'alice@example.com',
+  const [lastRequest]  = useState({
+    user:   'alice@example.com',
     action: 'SELECT on users table',
-    time: '2 minutes ago',
+    time:   '2 minutes ago',
   })
   const [errorStats] = useState({ failed: 12, total: 374 })
 
-  const errorRate     = ((errorStats.failed / errorStats.total) * 100).toFixed(1)
-  const errorRateNum  = parseFloat(errorRate)
+  const errorRate      = ((errorStats.failed / errorStats.total) * 100).toFixed(1)
+  const errorRateNum   = parseFloat(errorRate)
   const errorRateColor = errorRateNum < 5 ? 'text-emerald-500' : errorRateNum < 15 ? 'text-yellow-500' : 'text-red-500'
   const errorIconBg    = errorRateNum < 5 ? 'bg-emerald-500/10' : errorRateNum < 15 ? 'bg-yellow-500/10' : 'bg-red-500/10'
   const errorIconColor = errorRateNum < 5 ? 'text-emerald-500' : errorRateNum < 15 ? 'text-yellow-500' : 'text-red-500'
 
-  if (authLoading) {
+  // ── Loading state — wait for session to hydrate ───────────────────────────
+  if (isLoading) {
     return (
       <div className="min-h-full flex items-center justify-center">
         <div className="text-center">
@@ -105,8 +92,7 @@ export default function DashboardPage() {
     )
   }
 
-  if (!user) return null
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="p-4 sm:p-6 space-y-6 sm:space-y-8">
 

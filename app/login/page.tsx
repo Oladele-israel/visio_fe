@@ -1,10 +1,10 @@
 'use client'
 
 import React, { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { useAuth } from '@/lib/auth-context'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { useRouter }        from 'next/navigation'
+import { useAuth }          from '@/lib/auth-context'
+import { Button }           from '@/components/ui/button'
+import { Input }            from '@/components/ui/input'
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react'
 import Link from 'next/link'
 
@@ -13,19 +13,16 @@ export default function LoginPage() {
   const { login } = useAuth()
 
   const [formData, setFormData] = useState({
-    email: '',
+    email:    '',
     password: '',
   })
 
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [error,        setError]        = useState<string | null>(null)
+  const [isLoading,    setIsLoading]    = useState(false)
   const [showPassword, setShowPassword] = useState(false)
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(prev => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }))
+    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }))
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,6 +44,7 @@ export default function LoginPage() {
       await login(formData.email, formData.password)
       router.replace('/dashboard')
     } catch (err: any) {
+      // better-auth throws a plain Error with .message set
       setError(err?.message || 'Login failed')
     } finally {
       setIsLoading(false)
@@ -91,6 +89,7 @@ export default function LoginPage() {
                 onChange={handleChange}
                 className="pl-10"
                 disabled={isLoading}
+                autoComplete="email"
               />
             </div>
           </div>
@@ -101,7 +100,6 @@ export default function LoginPage() {
               <label className="text-sm font-medium text-foreground">
                 Password
               </label>
-              {/* ── Forgot password link ── */}
               <Link
                 href="/forgotPassword"
                 className="text-xs text-blue-400 hover:underline transition-colors"
@@ -120,6 +118,7 @@ export default function LoginPage() {
                 onChange={handleChange}
                 className="pl-10 pr-10"
                 disabled={isLoading}
+                autoComplete="current-password"
               />
               <button
                 type="button"
@@ -128,7 +127,10 @@ export default function LoginPage() {
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                 disabled={isLoading}
               >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPassword
+                  ? <EyeOff className="w-4 h-4" />
+                  : <Eye    className="w-4 h-4" />
+                }
               </button>
             </div>
           </div>
@@ -140,6 +142,7 @@ export default function LoginPage() {
           >
             {isLoading ? 'Logging in...' : 'Log In'}
           </Button>
+
         </form>
 
         {/* Footer */}
@@ -149,6 +152,7 @@ export default function LoginPage() {
             Sign up
           </Link>
         </p>
+
       </div>
     </div>
   )
