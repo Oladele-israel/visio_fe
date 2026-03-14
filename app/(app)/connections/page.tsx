@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { api } from '@/lib/api'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
+import { useRouter }            from 'next/navigation'
+import { api }                  from '@/lib/api'
+import { Input }                from '@/components/ui/input'
+import { Button }               from '@/components/ui/button'
 import {
   Database, Plus, Plug, Pencil, Trash2,
   Loader2, AlertTriangle, CheckCircle2,
@@ -13,28 +13,23 @@ import {
   RefreshCw,
 } from 'lucide-react'
 
-/* ─────────────────────────────────────────
-   TYPES — matches real backend response shape
-───────────────────────────────────────── */
 type DbType = 'postgres' | 'mysql' | 'sqlite' | 'mssql'
 
 interface Connection {
-  id: string
-  name: string
-  type: string        // backend sends uppercase e.g. "POSTGRES" — normalised on use
-  host: string
-  port: number
-  database: string
-  username: string
-  password?: string   // backend may omit password in list response
-  ssl: boolean
+  id:        string
+  name:      string
+  type:      string
+  host:      string
+  port:      number
+  database:  string
+  username:  string
+  password?: string
+  ssl:       boolean
   isActive?: boolean
   createdAt?: string
 }
 
-// Normalise "POSTGRES" → "postgres" for badge lookup
-const normaliseType = (type: string): DbType =>
-  type.toLowerCase() as DbType
+const normaliseType = (type: string): DbType => type.toLowerCase() as DbType
 
 const DB_TYPES: { value: DbType; label: string; defaultPort: number }[] = [
   { value: 'postgres', label: 'PostgreSQL', defaultPort: 5432 },
@@ -50,28 +45,22 @@ const DB_BADGE: Record<DbType, { label: string; color: string }> = {
   sqlite:   { label: 'SQLite',     color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
 }
 
-// Fallback so the UI never crashes on an unknown type
 const FALLBACK_BADGE = { label: 'Database', color: 'bg-muted text-muted-foreground border-border' }
+const getBadge = (type: string) => DB_BADGE[normaliseType(type)] ?? FALLBACK_BADGE
 
-const getBadge = (type: string) =>
-  DB_BADGE[normaliseType(type)] ?? FALLBACK_BADGE
+// ─── shared error extractor ───────────────────────────────────────────────────
+// Our Next.js API routes return { error: '...' } not { message: '...' }
+const apiErr = (err: any, fallback: string) =>
+  err?.response?.data?.error ?? err?.message ?? fallback
 
-/* ─────────────────────────────────────────
-   FIELD COMPONENT
-───────────────────────────────────────── */
-function Field({
-  label, icon, error, children,
-}: {
-  label: string
-  icon: React.ReactNode
-  error?: string
-  children: React.ReactNode
+/* ─── Field ──────────────────────────────────────────────────────────────── */
+function Field({ label, icon, error, children }: {
+  label: string; icon: React.ReactNode; error?: string; children: React.ReactNode
 }) {
   return (
     <div className="space-y-1.5">
       <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-        <span className="text-blue-400">{icon}</span>
-        {label}
+        <span className="text-blue-400">{icon}</span>{label}
       </label>
       {children}
       {error && (
@@ -83,9 +72,7 @@ function Field({
   )
 }
 
-/* ─────────────────────────────────────────
-   MODAL BACKDROP
-───────────────────────────────────────── */
+/* ─── Modal ──────────────────────────────────────────────────────────────── */
 function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -97,20 +84,16 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose: () =
   )
 }
 
-/* ─────────────────────────────────────────
-   EDIT MODAL
-───────────────────────────────────────── */
-function EditModal({
-  connection, onClose, onSave,
-}: {
+/* ─── EditModal ──────────────────────────────────────────────────────────── */
+function EditModal({ connection, onClose, onSave }: {
   connection: Connection
   onClose: () => void
   onSave: (updated: Connection) => void
 }) {
-  const [form, setForm]                 = useState<Connection>({ ...connection })
-  const [errors, setErrors]             = useState<Record<string, string>>({})
-  const [isSaving, setIsSaving]         = useState(false)
-  const [apiError, setApiError]         = useState<string | null>(null)
+  const [form,         setForm]         = useState<Connection>({ ...connection })
+  const [errors,       setErrors]       = useState<Record<string, string>>({})
+  const [isSaving,     setIsSaving]     = useState(false)
+  const [apiError,     setApiError]     = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
 
   const set = (field: keyof Connection, value: string | number | boolean) => {
@@ -121,9 +104,9 @@ function EditModal({
   const validate = () => {
     const e: Record<string, string> = {}
     const t = normaliseType(form.type)
-    if (!form.name.trim())                   e.name     = 'Required'
-    if (!form.host.trim() && t !== 'sqlite') e.host     = 'Required'
-    if (!form.database.trim())               e.database = 'Required'
+    if (!form.name.trim())                       e.name     = 'Required'
+    if (!form.host.trim() && t !== 'sqlite')     e.host     = 'Required'
+    if (!form.database.trim())                   e.database = 'Required'
     if (!form.username.trim() && t !== 'sqlite') e.username = 'Required'
     setErrors(e)
     return Object.keys(e).length === 0
@@ -134,7 +117,6 @@ function EditModal({
     setApiError(null)
     setIsSaving(true)
     try {
-      // ── API CALL: PATCH /db-agent/:id ─────────────────────────────────
       const res = await api.patch(`/db-agent/${form.id}`, {
         name:     form.name,
         type:     form.type,
@@ -145,10 +127,9 @@ function EditModal({
         ...(form.password ? { password: form.password } : {}),
         ssl:      form.ssl,
       })
-      // ─────────────────────────────────────────────────────────────────
       onSave(res.data?.data ?? res.data)
     } catch (err: any) {
-      setApiError(err?.response?.data?.message ?? 'Failed to save changes')
+      setApiError(apiErr(err, 'Failed to save changes'))
     } finally {
       setIsSaving(false)
     }
@@ -158,7 +139,6 @@ function EditModal({
 
   return (
     <Modal onClose={onClose}>
-      {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
@@ -174,7 +154,6 @@ function EditModal({
         </button>
       </div>
 
-      {/* Body */}
       <div className="p-6 space-y-5">
         {apiError && (
           <div className="flex items-center gap-2.5 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
@@ -195,8 +174,7 @@ function EditModal({
                   normaliseType(form.type) === db.value
                     ? 'bg-blue-500/10 border-blue-500/40 text-blue-400'
                     : 'bg-background border-border text-muted-foreground hover:border-blue-500/30 hover:text-blue-400 hover:bg-blue-500/5'
-                }`}
-              >
+                }`}>
                 {db.label}
               </button>
             ))}
@@ -258,7 +236,6 @@ function EditModal({
         )}
       </div>
 
-      {/* Footer */}
       <div className="px-6 py-4 border-t border-border flex items-center justify-between bg-background/40">
         <button onClick={onClose} className="text-sm text-muted-foreground hover:text-blue-400 transition-colors">
           Cancel
@@ -272,24 +249,17 @@ function EditModal({
   )
 }
 
-/* ─────────────────────────────────────────
-   DELETE CONFIRMATION MODAL
-───────────────────────────────────────── */
-function DeleteModal({
-  connection, onClose, onConfirm,
-}: {
+/* ─── DeleteModal ────────────────────────────────────────────────────────── */
+function DeleteModal({ connection, onClose, onConfirm }: {
   connection: Connection
   onClose: () => void
   onConfirm: () => void
 }) {
-  const [isDeleting, setIsDeleting]   = useState(false)
-  const [confirmText, setConfirmText] = useState('')
-  const [apiError, setApiError]       = useState<string | null>(null)
+  const [isDeleting,   setIsDeleting]   = useState(false)
+  const [confirmText,  setConfirmText]  = useState('')
+  const [apiError,     setApiError]     = useState<string | null>(null)
 
-  // Normalise both strings: trim, collapse internal whitespace, lowercase compare
-  const normaliseStr = (s: string) =>
-    s.trim().replace(/\s+/g, ' ')
-
+  const normaliseStr = (s: string) => s.trim().replace(/\s+/g, ' ')
   const expectedName = normaliseStr(connection.name)
   const typedName    = normaliseStr(confirmText)
   const canDelete    = typedName === expectedName
@@ -299,12 +269,10 @@ function DeleteModal({
     setApiError(null)
     setIsDeleting(true)
     try {
-      // ── API CALL: DELETE /db-agent/:id ────────────────────────────────
       await api.delete(`/db-agent/${connection.id}`)
-      // ─────────────────────────────────────────────────────────────────
       onConfirm()
     } catch (err: any) {
-      setApiError(err?.response?.data?.message ?? 'Failed to delete connection')
+      setApiError(apiErr(err, 'Failed to delete connection'))
     } finally {
       setIsDeleting(false)
     }
@@ -337,12 +305,6 @@ function DeleteModal({
           <label className="text-xs text-muted-foreground">
             Type <span className="font-semibold text-foreground select-all cursor-text">{expectedName}</span> to confirm
           </label>
-          {/* DEBUG — remove after confirming delete works */}
-          {process.env.NODE_ENV === 'development' && (
-            <p className="text-[10px] text-muted-foreground/50 font-mono break-all">
-              expected: [{expectedName}] ({expectedName.length} chars) | typed: [{typedName}] ({typedName.length} chars)
-            </p>
-          )}
           <Input
             placeholder={expectedName}
             value={confirmText}
@@ -355,12 +317,11 @@ function DeleteModal({
                 : 'focus-visible:ring-red-500/30'
             }`}
           />
-          {/* Live match indicator */}
           {typedName.length > 0 && (
             <p className={`text-xs flex items-center gap-1.5 ${canDelete ? 'text-emerald-400' : 'text-red-400'}`}>
               {canDelete
                 ? <><CheckCircle2 className="w-3 h-3" /> Name matches — you can now delete</>
-                : <><AlertCircle className="w-3 h-3" /> Name doesn&apos;t match yet</>
+                : <><AlertCircle  className="w-3 h-3" /> Name doesn&apos;t match yet</>
               }
             </p>
           )}
@@ -370,18 +331,13 @@ function DeleteModal({
           <button onClick={onClose} className="text-sm text-muted-foreground hover:text-blue-400 transition-colors">
             Cancel
           </button>
-          <Button
-            onClick={handleDelete}
-            disabled={!canDelete || isDeleting}
+          <Button onClick={handleDelete} disabled={!canDelete || isDeleting}
             className={`h-9 px-5 gap-2 text-white transition-all ${
-              canDelete
-                ? 'bg-red-600 hover:bg-red-500 cursor-pointer'
-                : 'bg-red-600/40 cursor-not-allowed opacity-50'
-            }`}
-          >
+              canDelete ? 'bg-red-600 hover:bg-red-500' : 'bg-red-600/40 cursor-not-allowed opacity-50'
+            }`}>
             {isDeleting
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Deleting...</>
-              : <><Trash2 className="w-4 h-4" /> Delete Connection</>
+              : <><Trash2  className="w-4 h-4" /> Delete Connection</>
             }
           </Button>
         </div>
@@ -390,21 +346,15 @@ function DeleteModal({
   )
 }
 
-/* ─────────────────────────────────────────
-   CONNECTION CARD
-───────────────────────────────────────── */
-function ConnectionCard({
-  connection, onEdit, onDelete, onConnect, isConnecting,
-}: {
-  connection: Connection
-  onEdit: () => void
-  onDelete: () => void
-  onConnect: () => void
+/* ─── ConnectionCard ─────────────────────────────────────────────────────── */
+function ConnectionCard({ connection, onEdit, onDelete, onConnect, isConnecting }: {
+  connection:   Connection
+  onEdit:       () => void
+  onDelete:     () => void
+  onConnect:    () => void
   isConnecting: boolean
 }) {
-  // getBadge normalises uppercase type from backend before lookup
   const badge = getBadge(connection.type)
-
   return (
     <div className="bg-card border border-border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 hover:border-blue-500/30 transition-all duration-200">
       <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0">
@@ -446,7 +396,7 @@ function ConnectionCard({
           className="bg-blue-600 hover:bg-blue-500 text-white h-9 px-4 gap-2 text-sm">
           {isConnecting
             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
-            : <><Plug className="w-3.5 h-3.5" /> Connect</>
+            : <><Plug    className="w-3.5 h-3.5" /> Connect</>
           }
         </Button>
       </div>
@@ -454,9 +404,7 @@ function ConnectionCard({
   )
 }
 
-/* ─────────────────────────────────────────
-   MAIN PAGE
-───────────────────────────────────────── */
+/* ─── ConnectionsPage ────────────────────────────────────────────────────── */
 export default function ConnectionsPage() {
   const router = useRouter()
 
@@ -469,17 +417,15 @@ export default function ConnectionsPage() {
   const [connectSuccess, setConnectSuccess] = useState<string | null>(null)
   const [connectError,   setConnectError]   = useState<string | null>(null)
 
-  /* ─────────────────────────────────────
-     API CALL 1 — GET /db-agent
-  ───────────────────────────────────── */
   const fetchConnections = async () => {
     setIsLoading(true)
     setFetchError(null)
     try {
       const res = await api.get('/db-agent')
+      // GET /api/db-agent returns { data: [...], meta: {...} }
       setConnections(res.data?.data ?? [])
     } catch (err: any) {
-      setFetchError(err?.response?.data?.message ?? 'Failed to load connections')
+      setFetchError(apiErr(err, 'Failed to load connections'))
     } finally {
       setIsLoading(false)
     }
@@ -487,26 +433,16 @@ export default function ConnectionsPage() {
 
   useEffect(() => { fetchConnections() }, [])
 
-  /* ─────────────────────────────────────
-     API CALL 2 — POST /db-agent/:id/connect
-  ───────────────────────────────────── */
   const handleConnect = async (conn: Connection) => {
     setConnectingId(conn.id)
     setConnectError(null)
     try {
-      const res = await api.post(`/db-agent/${conn.id}/connect`)
-
-      const sessionId = res.data?.sessionId ?? res.data?.session_id ?? res.data?.data?.sessionId
-      if (sessionId) {
-        sessionStorage.setItem('db-session-id', sessionId)
-        sessionStorage.setItem('db-session-connection-id', conn.id)
-        api.defaults.headers.common['X-Session-Id'] = sessionId
-      }
-
+      // No /connect endpoint in Next.js — connections are stateless per-request.
+      // Just navigate directly to the visualize page.
       setConnectSuccess(conn.id)
       setTimeout(() => router.push(`/visualize/${conn.id}`), 800)
     } catch (err: any) {
-      setConnectError(err?.response?.data?.message ?? 'Connection failed')
+      setConnectError(apiErr(err, 'Connection failed'))
       setConnectingId(null)
     }
   }
@@ -616,9 +552,9 @@ export default function ConnectionsPage() {
                 <ConnectionCard
                   connection={conn}
                   isConnecting={connectingId === conn.id}
-                  onEdit={() => setEditTarget(conn)}
-                  onDelete={() => setDeleteTarget(conn)}
-                  onConnect={() => handleConnect(conn)}
+                  onEdit={()    => setEditTarget(conn)}
+                  onDelete={()  => setDeleteTarget(conn)}
+                  onConnect={()  => handleConnect(conn)}
                 />
               </div>
             ))}
