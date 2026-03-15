@@ -1,9 +1,8 @@
-// app/connections/[id]/visualize/page.tsx
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import { api } from '@/lib/api'
+import { useParams, useRouter }                       from 'next/navigation'
+import { api }                                        from '@/lib/api'
 import {
   Database, Table2, ChevronRight, ChevronDown,
   Search, X, ArrowLeft, Loader2,
@@ -18,47 +17,46 @@ import {
    TYPES
 ───────────────────────────────────────────────────────────────────────────── */
 interface Column {
-  name: string
-  dataType: string
-  isNullable: boolean
+  name:         string
+  dataType:     string
+  isNullable:   boolean
   isPrimaryKey: boolean
-  isUnique: boolean
-  isIdentifier: boolean   // backend-computed: PK or (unique + not nullable)
+  isUnique:     boolean
+  isIdentifier: boolean
 }
 
 interface Table {
-  name: string
+  name:    string
   columns: Column[]
 }
 
 interface Relation {
-  type: 'belongsTo' | 'hasMany'
-  fromTable: string
+  type:       'belongsTo' | 'hasMany'
+  fromTable:  string
   fromColumn: string
-  toTable: string
-  toColumn: string
+  toTable:    string
+  toColumn:   string
   constraint: string
 }
 
-// Backend always returns { success, data: { columns, rows, total } }
 interface QueryResult {
   columns: string[]
-  rows: Record<string, any>[]
-  total: number
+  rows:    Record<string, any>[]
+  total:   number
 }
 
 interface TraversalContext {
   relationType: 'belongsTo' | 'hasMany'
-  sourceTable: string
+  sourceTable:  string
   sourceColumn: string
-  sourceValue: string | number
-  targetTable: string
+  sourceValue:  string | number
+  targetTable:  string
   targetColumn: string
 }
 
 interface BreadcrumbItem {
-  table: string
-  label: string
+  table:             string
+  label:             string
   traversalContext?: TraversalContext
 }
 
@@ -66,26 +64,17 @@ const PAGE_SIZE = 20
 
 /* ─────────────────────────────────────────────────────────────────────────────
    RESPONSE UNWRAPPERS
-   Backend always wraps: { success: true, data: <payload> }
-   These helpers extract the payload safely regardless of nesting.
+   All Next.js API routes return { success: true, data: <payload> }
 ───────────────────────────────────────────────────────────────────────────── */
-
-/** Unwrap { success, data: Table[] } or plain Table[] */
 function unwrapSchema(res: any): Table[] {
   const raw = res?.data?.data ?? res?.data
   return Array.isArray(raw) ? raw : []
 }
 
-/** Unwrap { success, data: { table, relations: Relation[] } } */
 function unwrapRelations(res: any): Relation[] {
-  return (
-    res?.data?.data?.relations ??
-    res?.data?.relations ??
-    []
-  )
+  return res?.data?.data?.relations ?? res?.data?.relations ?? []
 }
 
-/** Unwrap { success, data: { columns, rows, total } } */
 function unwrapQueryResult(res: any): QueryResult | null {
   const payload = res?.data?.data ?? res?.data
   if (!payload || !Array.isArray(payload.rows)) return null
@@ -96,7 +85,6 @@ function unwrapQueryResult(res: any): QueryResult | null {
   }
 }
 
-/** Unwrap connection name from { data: { name } } or { name } */
 function unwrapConnectionName(res: any): string | null {
   return res?.data?.data?.name ?? res?.data?.name ?? null
 }
@@ -120,32 +108,35 @@ function typeIcon(dataType: string) {
 
 function formatCellValue(val: any): string {
   if (val === null || val === undefined) return '—'
-  if (typeof val === 'boolean') return val ? 'true' : 'false'
-  if (typeof val === 'object') return JSON.stringify(val)
+  if (typeof val === 'boolean')          return val ? 'true' : 'false'
+  if (typeof val === 'object')           return JSON.stringify(val)
   return String(val)
 }
 
 /**
- * Returns the column + value that best identifies a row.
- * Priority: isPrimaryKey → isIdentifier → column named "id"/"uuid"
- * Returns null if no identifier found — callers disable traversal in that case.
+ * Resolves the best row identifier.
+ * Priority: isPrimaryKey → isIdentifier → column named "id"
+ * Never uses "pk" — always prefer "id".
  */
 function resolveRowId(
-  row: Record<string, any>,
+  row:     Record<string, any>,
   columns: Column[] | undefined,
 ): { column: string; value: string | number } | null {
   if (!columns) return null
 
+  // 1. Explicit primary key
   const pk = columns.find(c => c.isPrimaryKey)
   if (pk && row[pk.name] != null) return { column: pk.name, value: row[pk.name] }
 
+  // 2. Any identifier column (unique + not nullable)
   const identifier = columns.find(c => c.isIdentifier && row[c.name] != null)
   if (identifier) return { column: identifier.name, value: row[identifier.name] }
 
-  const fallback = columns.find(
-    c => ['id', 'uuid'].includes(c.name.toLowerCase()) && row[c.name] != null,
+  // 3. Column literally named "id" — never "pk"
+  const idCol = columns.find(
+    c => c.name.toLowerCase() === 'id' && row[c.name] != null,
   )
-  if (fallback) return { column: fallback.name, value: row[fallback.name] }
+  if (idCol) return { column: idCol.name, value: row[idCol.name] }
 
   return null
 }
@@ -165,7 +156,7 @@ function dedupeRelations(relations: Relation[]): Relation[] {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   COLUMN BADGE  (stable — defined outside component to avoid remount)
+   COL BADGE
 ───────────────────────────────────────────────────────────────────────────── */
 function ColBadge({ col }: { col: Column }) {
   return (
@@ -217,64 +208,9 @@ export default function VisualizePage() {
   const [orderBy,     setOrderBy]     = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
 
   /* ─────────────────────────────────────────────────────────────────────────
-     SESSION BOOTSTRAP
-     
-     FIX: Reuse the cached sessionId when it belongs to the current connection.
-     The old code always called /connect regardless, creating a new agent-side
-     session on every page load or React StrictMode double-render.
-     
-     Only call /connect when:
-       - No sessionId is stored at all, OR
-       - The stored sessionId belongs to a different connectionId
-  ───────────────────────────────────────────────────────────────────────── */
-const sessionBootstrapCache = new Map<string, Promise<string | null>>()
-
-// Then inside establishSession, wrap the /connect call:
-const establishSession = useCallback(async (): Promise<string | null> => {
-  const storedConnectionId = sessionStorage.getItem('db-session-connection-id')
-  const storedSessionId    = sessionStorage.getItem('db-session-id')
-
-  if (storedConnectionId === connectionId && storedSessionId) {
-    api.defaults.headers.common['X-Session-Id'] = storedSessionId
-    return storedSessionId
-  }
-
-  // Return existing in-flight request if one is already running for this connectionId
-  if (sessionBootstrapCache.has(connectionId)) {
-    return sessionBootstrapCache.get(connectionId)!
-  }
-
-  sessionStorage.removeItem('db-session-id')
-  sessionStorage.removeItem('db-session-connection-id')
-  delete api.defaults.headers.common['X-Session-Id']
-
-  const promise = api.post(`/db-agent/${connectionId}/connect`)
-    .then(res => {
-      const sessionId: string | null =
-        res.data?.sessionId ??
-        res.data?.data?.sessionId ??
-        null
-
-      if (sessionId) {
-        sessionStorage.setItem('db-session-id', sessionId)
-        sessionStorage.setItem('db-session-connection-id', connectionId)
-        api.defaults.headers.common['X-Session-Id'] = sessionId
-      }
-
-      return sessionId
-    })
-    .catch(() => null)
-    .finally(() => {
-      // Clear the in-flight entry once settled so future reconnects work normally
-      sessionBootstrapCache.delete(connectionId)
-    })
-
-  sessionBootstrapCache.set(connectionId, promise)
-  return promise
-}, [connectionId])
-
-  /* ─────────────────────────────────────────────────────────────────────────
      LOAD SCHEMA
+     No /connect needed — Next.js API routes are stateless, every request
+     opens its own connection via withPostgres() in the route handler.
   ───────────────────────────────────────────────────────────────────────── */
   const loadSchema = useCallback(async () => {
     setSchemaLoading(true)
@@ -283,30 +219,25 @@ const establishSession = useCallback(async (): Promise<string | null> => {
     setSelectedTable(null)
     setBreadcrumb([])
 
-    const sessionId = await establishSession()
-    if (!sessionId) {
-      setSchemaError('Failed to establish session. Check connection settings.')
-      setSchemaLoading(false)
-      return
-    }
-
     try {
       const [schemaRes, connRes] = await Promise.all([
+        // ✅ GET /api/db-agent/:id/schema
         api.get(`/db-agent/${connectionId}/schema`),
         api.get(`/db-agent/${connectionId}`).catch(() => null),
       ])
 
-      // FIX: use dedicated unwrapper — backend wraps in { success, data: [...] }
       setSchema(unwrapSchema(schemaRes))
 
       const name = unwrapConnectionName(connRes)
       if (name) setConnectionName(name)
     } catch (err: any) {
-      setSchemaError(err?.response?.data?.message ?? 'Failed to load schema')
+      setSchemaError(
+        err?.response?.data?.error ?? err?.message ?? 'Failed to load schema',
+      )
     } finally {
       setSchemaLoading(false)
     }
-  }, [connectionId, establishSession])
+  }, [connectionId])
 
   useEffect(() => {
     setSelectedTable(null)
@@ -321,11 +252,11 @@ const establishSession = useCallback(async (): Promise<string | null> => {
 
   /* ─────────────────────────────────────────────────────────────────────────
      LOAD RELATIONS
+     ✅ GET /api/db-agent/:id/relations/:table  (was /relation/:table)
   ───────────────────────────────────────────────────────────────────────── */
   const loadRelations = useCallback(async (tableName: string) => {
     try {
-      const res = await api.get(`/db-agent/${connectionId}/relation/${tableName}`)
-      // FIX: backend returns { success, data: { table, relations: [...] } }
+      const res = await api.get(`/db-agent/${connectionId}/relations/${tableName}`)
       setRelations(unwrapRelations(res))
     } catch {
       setRelations([])
@@ -334,6 +265,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
 
   /* ─────────────────────────────────────────────────────────────────────────
      QUERY TABLE ROWS
+     ✅ POST /api/db-agent/:id/query/:table  (was /:id/:table/query)
   ───────────────────────────────────────────────────────────────────────── */
   const queryTable = useCallback(async (
     tableName: string,
@@ -343,17 +275,18 @@ const establishSession = useCallback(async (): Promise<string | null> => {
     setQueryLoading(true)
     setQueryError(null)
     try {
-      const res = await api.post(`/db-agent/${connectionId}/${tableName}/query`, {
+      const res = await api.post(`/db-agent/${connectionId}/query/${tableName}`, {
         limit:  PAGE_SIZE,
         offset: pg * PAGE_SIZE,
-        ...(ob ? { orderBy: { column: ob.column, direction: ob.direction } } : {}),
+        ...(ob ? { orderBy: ob } : {}),
       })
-      // FIX: backend returns { success, data: { columns, rows, total } }
       const result = unwrapQueryResult(res)
       if (!result) throw new Error('Unexpected response shape from query endpoint')
       setQueryResult(result)
     } catch (err: any) {
-      setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to load rows')
+      setQueryError(
+        err?.response?.data?.error ?? err?.message ?? 'Failed to load rows',
+      )
       setQueryResult(null)
     } finally {
       setQueryLoading(false)
@@ -362,27 +295,29 @@ const establishSession = useCallback(async (): Promise<string | null> => {
 
   /* ─────────────────────────────────────────────────────────────────────────
      TRAVERSE RELATION
-     
-     belongsTo → read FK value from current row
-                 e.g. transaction.user_id = 5 → SELECT * FROM users WHERE id = 5
-     
-     hasMany   → read parent identifier from current row
-                 e.g. user.id = 5 → SELECT * FROM transactions WHERE user_id = 5
+     ✅ POST /api/db-agent/:id/traverse  (was /query/relation/traverse)
+
+     belongsTo: read FK value from current row
+       e.g. transaction.user_id = 5 → WHERE id = 5 on users
+
+     hasMany: read identifier from current row (always prefer `id` over `pk`)
+       e.g. user.id = 5 → WHERE user_id = 5 on transactions
   ───────────────────────────────────────────────────────────────────────── */
   const traverseRelation = useCallback(async (
-    rel: Relation,
-    row: Record<string, any>,
-    currentTable: string,
-    currentTableColumns: Column[] | undefined,
+    rel:                Relation,
+    row:                Record<string, any>,
+    currentTable:       string,
+    currentTableCols:   Column[] | undefined,
   ) => {
     setQueryLoading(true)
     setQueryError(null)
 
     try {
       let sourceColumn: string
-      let sourceValue: string | number
+      let sourceValue:  string | number
 
       if (rel.type === 'belongsTo') {
+        // Read the FK value stored in this row's column
         sourceColumn = rel.fromColumn
         sourceValue  = row[rel.fromColumn]
         if (sourceValue == null) {
@@ -391,7 +326,8 @@ const establishSession = useCallback(async (): Promise<string | null> => {
           return
         }
       } else {
-        const rowId = resolveRowId(row, currentTableColumns)
+        // hasMany — use this row's identifier (prefer `id`, never `pk`)
+        const rowId = resolveRowId(row, currentTableCols)
         if (!rowId) {
           setQueryError('Cannot determine row identifier for hasMany traversal')
           setQueryLoading(false)
@@ -401,7 +337,8 @@ const establishSession = useCallback(async (): Promise<string | null> => {
         sourceValue  = rowId.value
       }
 
-      const res = await api.post(`/db-agent/${connectionId}/query/relation/traverse`, {
+      // ✅ POST /api/db-agent/:id/traverse
+      const res = await api.post(`/db-agent/${connectionId}/traverse`, {
         sourceTable:  currentTable,
         sourceColumn,
         sourceValue,
@@ -412,7 +349,6 @@ const establishSession = useCallback(async (): Promise<string | null> => {
         offset:       0,
       })
 
-      // FIX: backend wraps in { success, data: { columns, rows, total } }
       const result = unwrapQueryResult(res)
       if (!result) throw new Error('Unexpected response shape from traverse endpoint')
 
@@ -438,7 +374,9 @@ const establishSession = useCallback(async (): Promise<string | null> => {
         },
       ])
     } catch (err: any) {
-      setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to traverse relation')
+      setQueryError(
+        err?.response?.data?.error ?? err?.message ?? 'Failed to traverse relation',
+      )
     } finally {
       setQueryLoading(false)
     }
@@ -458,6 +396,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
 
   /* ─────────────────────────────────────────────────────────────────────────
      BREADCRUMB NAVIGATION
+     Re-traverses using the stored context — ✅ POST /api/db-agent/:id/traverse
   ───────────────────────────────────────────────────────────────────────── */
   const handleBreadcrumbClick = useCallback(async (index: number) => {
     const crumb   = breadcrumb[index]
@@ -472,7 +411,8 @@ const establishSession = useCallback(async (): Promise<string | null> => {
       setQueryLoading(true)
       setQueryError(null)
       try {
-        const res = await api.post(`/db-agent/${connectionId}/query/relation/traverse`, {
+        // ✅ POST /api/db-agent/:id/traverse
+        const res = await api.post(`/db-agent/${connectionId}/traverse`, {
           sourceTable:  ctx.sourceTable,
           sourceColumn: ctx.sourceColumn,
           sourceValue:  ctx.sourceValue,
@@ -486,7 +426,9 @@ const establishSession = useCallback(async (): Promise<string | null> => {
         if (!result) throw new Error('Unexpected response shape')
         setQueryResult(result)
       } catch (err: any) {
-        setQueryError(err?.response?.data?.message ?? err?.message ?? 'Failed to navigate back')
+        setQueryError(
+          err?.response?.data?.error ?? err?.message ?? 'Failed to navigate back',
+        )
       } finally {
         setQueryLoading(false)
       }
@@ -551,12 +493,8 @@ const establishSession = useCallback(async (): Promise<string | null> => {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
 
-      {/* ── Sidebar ────────────────────────────────────────────────────────── */}
-      <aside
-        className={`shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${
-          sidebarOpen ? 'w-64' : 'w-0 border-r-0'
-        }`}
-      >
+      {/* ── Sidebar ── */}
+      <aside className={`shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${sidebarOpen ? 'w-64' : 'w-0 border-r-0'}`}>
         <div className="w-64 h-full flex flex-col bg-card">
           {/* Header */}
           <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
@@ -589,13 +527,12 @@ const establishSession = useCallback(async (): Promise<string | null> => {
 
           {/* Count */}
           <div className="px-5 pb-1 shrink-0">
-            {schemaLoading ? (
-              <div className="h-3 w-16 bg-border rounded animate-pulse" />
-            ) : (
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
-              </p>
-            )}
+            {schemaLoading
+              ? <div className="h-3 w-16 bg-border rounded animate-pulse" />
+              : <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
+                </p>
+            }
           </div>
 
           {/* Error */}
@@ -604,9 +541,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
                 <p>{schemaError}</p>
-                <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">
-                  Retry
-                </button>
+                <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">Retry</button>
               </div>
             </div>
           )}
@@ -632,23 +567,16 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                 return (
                   <div key={table.name}>
                     <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
-                      <button
-                        onClick={() => toggleExpand(table.name)}
-                        className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0"
-                      >
+                      <button onClick={() => toggleExpand(table.name)} className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0">
                         {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       </button>
                       <button
                         onClick={() => handleSelectTable(table.name)}
-                        className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${
-                          isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'
-                        }`}
+                        className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'}`}
                       >
                         <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate">{table.name}</span>
-                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">
-                          {table.columns.length}
-                        </span>
+                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">{table.columns.length}</span>
                       </button>
                     </div>
                     {isExpanded && (
@@ -656,9 +584,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                         {table.columns.map(col => (
                           <div key={col.name} className="flex items-center gap-1.5 py-0.5">
                             {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
-                            <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">
-                              {col.name}
-                            </span>
+                            <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">{col.name}</span>
                             <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
                               {col.dataType.split('(')[0].replace(' without time zone', '')}
                             </span>
@@ -672,37 +598,31 @@ const establishSession = useCallback(async (): Promise<string | null> => {
             </div>
           )}
 
-          {/* Back button */}
+          {/* Back */}
           <div className="border-t border-border p-3 shrink-0">
             <button
               onClick={() => router.push('/connections')}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
             >
-              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
-              Back to Connections
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" /> Back to Connections
             </button>
           </div>
         </div>
       </aside>
 
-      {/* ── Main content ───────────────────────────────────────────────────── */}
+      {/* ── Main ── */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
         {/* Top bar */}
         <header className="h-14 shrink-0 border-b border-border bg-card flex items-center px-4 gap-3">
-          <button
-            onClick={() => setSidebarOpen(p => !p)}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0"
-          >
+          <button onClick={() => setSidebarOpen(p => !p)} className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0">
             {sidebarOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeftOpen className="w-5 h-5" />}
           </button>
 
           <nav className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
             <button
               onClick={() => { setSelectedTable(null); setBreadcrumb([]) }}
-              className={`text-xs shrink-0 transition-colors ${
-                breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'
-              }`}
+              className={`text-xs shrink-0 transition-colors ${breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
             >
               {connectionName}
             </button>
@@ -711,11 +631,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                 <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
                 <button
                   onClick={() => handleBreadcrumbClick(i)}
-                  className={`text-xs truncate transition-colors ${
-                    i === breadcrumb.length - 1
-                      ? 'text-foreground font-semibold'
-                      : 'text-muted-foreground hover:text-blue-400'
-                  }`}
+                  className={`text-xs truncate transition-colors ${i === breadcrumb.length - 1 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
                 >
                   {crumb.label}
                 </button>
@@ -730,11 +646,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
               </span>
             )}
             {selectedTable && (
-              <button
-                onClick={() => queryTable(selectedTable, page, orderBy)}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-                title="Refresh"
-              >
+              <button onClick={() => queryTable(selectedTable, page, orderBy)} className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="Refresh">
                 <RefreshCw className={`w-4 h-4 ${queryLoading ? 'animate-spin' : ''}`} />
               </button>
             )}
@@ -752,9 +664,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                 <ColBadge key={col.name} col={col} />
               ))}
               {currentTableSchema.columns.length > 5 && (
-                <span className="text-xs text-muted-foreground">
-                  +{currentTableSchema.columns.length - 5} more
-                </span>
+                <span className="text-xs text-muted-foreground">+{currentTableSchema.columns.length - 5} more</span>
               )}
             </div>
             <div className="relative shrink-0">
@@ -783,14 +693,11 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                   <Database className="w-7 h-7 text-blue-400" />
                 </div>
                 <h2 className="text-base font-semibold text-foreground">Select a table</h2>
-                <p className="text-sm text-muted-foreground">
-                  Choose a table from the sidebar to explore your data and traverse relationships.
-                </p>
+                <p className="text-sm text-muted-foreground">Choose a table from the sidebar to explore your data and traverse relationships.</p>
               </div>
             </div>
           ) : (
             <>
-              {/* ── Data table ── */}
               {queryLoading ? (
                 <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
                   <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
@@ -801,10 +708,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                   <div className="text-center space-y-2">
                     <AlertCircle className="w-8 h-8 text-red-400 mx-auto" />
                     <p className="text-sm text-red-400">{queryError}</p>
-                    <button
-                      onClick={() => queryTable(selectedTable, page, orderBy)}
-                      className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto"
-                    >
+                    <button onClick={() => queryTable(selectedTable, page, orderBy)} className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto">
                       <RefreshCw className="w-3 h-3" /> Retry
                     </button>
                   </div>
@@ -826,14 +730,8 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                           const isOrdered = orderBy?.column === col
                           const fkRel     = findFkRelation(col, relations)
                           return (
-                            <th
-                              key={col}
-                              className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group"
-                            >
-                              <button
-                                onClick={() => handleSort(col)}
-                                className="flex items-center gap-1.5 hover:text-blue-400 transition-colors"
-                              >
+                            <th key={col} className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group">
+                              <button onClick={() => handleSort(col)} className="flex items-center gap-1.5 hover:text-blue-400 transition-colors">
                                 {colSchema?.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400 shrink-0" />}
                                 {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
                                 <span>{col}</span>
@@ -858,10 +756,7 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                       {filteredRows.map((row, ri) => {
                         const rowId = resolveRowId(row, currentTableSchema?.columns)
                         return (
-                          <tr
-                            key={ri}
-                            className="border-b border-border/50 hover:bg-blue-500/5 transition-colors"
-                          >
+                          <tr key={ri} className="border-b border-border/50 hover:bg-blue-500/5 transition-colors">
                             {queryResult.columns.map(col => {
                               const val   = row[col]
                               const fkRel = findFkRelation(col, relations)
@@ -878,16 +773,13 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                                       <ExternalLink className="w-2.5 h-2.5 opacity-60" />
                                     </button>
                                   ) : (
-                                    <span className={`text-foreground truncate block ${
-                                      typeof val === 'boolean' ? (val ? 'text-emerald-400' : 'text-muted-foreground') : ''
-                                    }`}>
+                                    <span className={`text-foreground truncate block ${typeof val === 'boolean' ? (val ? 'text-emerald-400' : 'text-muted-foreground') : ''}`}>
                                       {formatCellValue(val)}
                                     </span>
                                   )}
                                 </td>
                               )
                             })}
-
                             {relations.length > 0 && (
                               <td className="px-4 py-2.5">
                                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -920,18 +812,10 @@ const establishSession = useCallback(async (): Promise<string | null> => {
                     Page {page + 1} · {Math.ceil(queryResult.total / PAGE_SIZE)} pages · {queryResult.total} rows
                   </span>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handlePage(-1)}
-                      disabled={page === 0 || queryLoading}
-                      className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
+                    <button onClick={() => handlePage(-1)} disabled={page === 0 || queryLoading} className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                       Previous
                     </button>
-                    <button
-                      onClick={() => handlePage(1)}
-                      disabled={!hasNextPage || queryLoading}
-                      className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
+                    <button onClick={() => handlePage(1)} disabled={!hasNextPage || queryLoading} className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                       Next
                     </button>
                   </div>
@@ -951,19 +835,13 @@ const establishSession = useCallback(async (): Promise<string | null> => {
             <>
               <span className="text-border">·</span>
               <span className="flex items-center gap-1">
-                <Table2 className="w-3 h-3" />
-                {selectedTable}
-                {currentTableSchema && (
-                  <span className="text-muted-foreground/60">({currentTableSchema.columns.length} cols)</span>
-                )}
+                <Table2 className="w-3 h-3" />{selectedTable}
+                {currentTableSchema && <span className="text-muted-foreground/60">({currentTableSchema.columns.length} cols)</span>}
               </span>
             </>
           )}
           {queryResult && !queryLoading && selectedTable && (
-            <>
-              <span className="text-border">·</span>
-              <span>{queryResult.total} total rows</span>
-            </>
+            <><span className="text-border">·</span><span>{queryResult.total} total rows</span></>
           )}
           {relations.length > 0 && selectedTable && (
             <>
