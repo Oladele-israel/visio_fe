@@ -41,3 +41,10 @@ export function decrypt(ciphertext: string): string {
   const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
   return decrypted.toString('utf8')
 }
+
+// host:     'db.prisma.io'
+// port:     5432
+// database: 'postgres'
+// username: 'f2c9348f54e8e41036c55daa88405b022e185fc9ce98cc67871e4c1536d9660c'
+// password: 'sk_OTx31YczsByJfpu0WDEsE'
+// ssl:      true   // because ?sslmode=require

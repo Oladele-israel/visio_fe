@@ -1,7 +1,7 @@
-// middleware.ts
 import { NextRequest, NextResponse } from 'next/server'
 
 const PUBLIC_PATHS = [
+  '/',           // landing page — always public
   '/login',
   '/signup',
   '/forgotPassword',
@@ -11,11 +11,14 @@ const PUBLIC_PATHS = [
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) {
-    return NextResponse.next()
-  }
+  // Allow all public paths through immediately
+  const isPublic =
+    pathname === '/' ||
+    PUBLIC_PATHS.some(p => p !== '/' && pathname.startsWith(p))
 
-  // We confirmed the cookie name is "visio.session_token"
+  if (isPublic) return NextResponse.next()
+
+  // Check session cookie — set by better-auth as 'visio.session_token'
   const sessionCookie = req.cookies.get('visio.session_token')
 
   if (!sessionCookie?.value) {
