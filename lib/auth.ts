@@ -3,12 +3,15 @@ import { betterAuth }    from 'better-auth'
 import { prismaAdapter } from 'better-auth/adapters/prisma'
 import { prisma }        from './prisma'
 
+const isProd = process.env.NODE_ENV === 'production'
+const appUrl = process.env.BETTER_AUTH_URL!
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: 'postgresql',
   }),
 
-  baseURL: process.env.BETTER_AUTH_URL!,
+  baseURL: appUrl,
   secret:  process.env.BETTER_AUTH_SECRET!,
 
   emailAndPassword: {
@@ -18,24 +21,21 @@ export const auth = betterAuth({
   },
 
   session: {
-    expiresIn: 60 * 60 * 24 * 7,  // 7 days
-    updateAge: 60 * 60 * 24,       // refresh if older than 1 day
-    // ── cookieCache disabled ─────────────────────────────────────────────
-    // With cookieCache enabled, better-auth skips the DB lookup for up to
-    // maxAge seconds. This means deleted/banned users retain access until
-    // the cache expires. Disable it so every request validates against DB.
-    cookieCache: {
-      enabled: false,
-    },
+    expiresIn:   60 * 60 * 24 * 7,  
+    updateAge:   60 * 60 * 24,      
+    cookieCache: { enabled: false },  
   },
 
   advanced: {
     cookiePrefix: 'visio',
     defaultCookieAttributes: {
-      secure:   process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
       httpOnly: true,
       path:     '/',
+
+      // Local:  sameSite=lax, secure=false  → cookies work over plain HTTP
+      // Prod:   sameSite=lax, secure=true   → cookies only sent over HTTPS
+      sameSite: 'lax',
+      secure:   isProd,
     },
   },
 })

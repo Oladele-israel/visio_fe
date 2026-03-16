@@ -42,7 +42,7 @@ export default function LoginPage() {
     try {
       setIsLoading(true)
       await login(formData.email, formData.password)
-      router.replace('/dashboard')
+      window.location.href= '/dashboard'
     } catch (err: any) {
       // better-auth throws a plain Error with .message set
       setError(err?.message || 'Login failed')
