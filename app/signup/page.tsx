@@ -40,7 +40,6 @@ export default function SignupPage() {
     try {
       setIsLoading(true)
       await signup(formData.email, formData.password, formData.name)
-      window.location.href = '/dashboard'
     } catch (err: any) {
       const message = err?.message || 'Signup failed'
       setError(Array.isArray(message) ? message[0] : message)

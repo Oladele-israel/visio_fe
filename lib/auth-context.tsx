@@ -16,7 +16,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-const PUBLIC_PATHS = ['/login', '/signup', '/forgotPassword']
+const PUBLIC_PATHS = ['/', '/login', '/signup', '/forgotPassword']
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: session, isPending } = useSession()
@@ -25,12 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isPending) return
 
-    const isPublic = PUBLIC_PATHS.some(p =>
-      window.location.pathname.startsWith(p)
-    )
+    const pathname = window.location.pathname
+    const isPublic = PUBLIC_PATHS.some(p => pathname === p || (p !== '/' && pathname.startsWith(p)))
 
     if (!session && !isPublic) {
       router.replace('/login')
+      return
+    }
+
+    // If authenticated and on a public/auth page, go to dashboard
+    if (session && (pathname === '/login' || pathname === '/signup')) {
+      router.replace('/dashboard')
     }
   }, [session, isPending, router])
 
