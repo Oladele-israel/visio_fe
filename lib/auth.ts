@@ -37,6 +37,7 @@ export const auth = betterAuth({
       sameSite: 'lax',
       secure:   isProd,
     },
+    useSecureCookies: isProd
   },
 })
 
