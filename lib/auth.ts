@@ -12,6 +12,12 @@ export const auth = betterAuth({
   }),
 
   baseURL: appUrl,
+  trustedOrigins: [
+    'http://localhost:3000',
+    process.env.BETTER_AUTH_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    'https://*.vercel.app',
+  ].filter(Boolean) as string[],
   secret:  process.env.BETTER_AUTH_SECRET!,
 
   emailAndPassword: {
