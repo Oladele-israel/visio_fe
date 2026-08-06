@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { api } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import {
   Database, Server, User, Lock, Hash,
   Globe, Shield, ChevronRight, Loader2,
   CheckCircle2, AlertCircle, Cloud, Terminal, Copy, Check, Zap, Laptop,
+  Download, RefreshCw, Radio, Sparkles,
 } from 'lucide-react'
 
 /* ─────────────────────────────────────────
@@ -93,14 +94,157 @@ export default function CreateConnectionPage() {
   })
 
   const [targetMode, setTargetMode] = useState<'direct' | 'tunnel'>('direct')
+  const [bridgeType, setBridgeType] = useState<'permanent' | 'quick'>('permanent')
   const [activeOs, setActiveOs] = useState<'mac' | 'linux' | 'win'>('mac')
   const [tunnelServiceMode, setTunnelServiceMode] = useState<'quick' | 'daemon'>('quick')
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
+  
+  /* Visio Agent State (Option A: 1-Click Auto-Bridge) */
+  const [agentStatus, setAgentStatus] = useState<'checking' | 'active' | 'offline'>('checking')
+  const [isBridging, setIsBridging] = useState(false)
+  const [agentMessage, setAgentMessage] = useState<string | null>(null)
+  const [discoveredDbs, setDiscoveredDbs] = useState<string[]>([])
+
   const [errors, setErrors] = useState<FormErrors>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
+
+  const [dbScanError, setDbScanError] = useState<string | null>(null)
+
+  /* Auto-discover local databases */
+  const fetchDiscoveredDatabases = async () => {
+    setDbScanError(null)
+    try {
+      const res = await fetch('http://127.0.0.1:4567/db/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          port: form.port || '5432',
+          username: form.username || 'postgres',
+          password: form.password || '',
+        }),
+      }).catch(() => null)
+
+      if (res && res.ok) {
+        const data = await res.json()
+        if (data.databases && data.databases.length > 0) {
+          setDiscoveredDbs(data.databases)
+          if (!form.database && data.databases[0]) {
+            setForm(prev => ({ ...prev, database: data.databases[0] }))
+          }
+        } else if (data.message) {
+          setDbScanError(data.message)
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  /* Check for local Visio Agent */
+  const checkAgentHealth = async () => {
+    setAgentStatus('checking')
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 1500)
+      const res = await fetch('http://127.0.0.1:4567/health', { signal: controller.signal })
+        .catch(() => fetch('http://localhost:4567/health', { signal: controller.signal }))
+        .catch(() => null)
+
+      clearTimeout(timeoutId)
+      if (res && res.ok) {
+        setAgentStatus('active')
+        fetchDiscoveredDatabases()
+      } else {
+        setAgentStatus('offline')
+      }
+    } catch {
+      setAgentStatus('offline')
+    }
+  }
+
+  useEffect(() => {
+    if (targetMode === 'tunnel') {
+      checkAgentHealth()
+      const interval = setInterval(() => {
+        checkAgentHealth()
+      }, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [targetMode])
+
+  const trigger1ClickAutoBridge = async () => {
+    setIsBridging(true)
+    setAgentMessage(null)
+
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000)
+
+      let res = await fetch('http://127.0.0.1:4567/bridge/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: form.port || '5432' }),
+        signal: controller.signal,
+      }).catch(() => null)
+
+      if (!res || !res.ok) {
+        res = await fetch('http://localhost:4567/bridge/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ port: form.port || '5432' }),
+          signal: controller.signal,
+        }).catch(() => null)
+      }
+
+      clearTimeout(timeoutId)
+
+      if (res && res.ok) {
+        const data = await res.json()
+        if (data.host) {
+          const cleanHost = data.host.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+          setForm(prev => ({ ...prev, host: cleanHost }))
+          setAgentStatus('active')
+          setAgentMessage(`✨ Successfully auto-bridged! Host pre-filled: ${cleanHost}`)
+        }
+
+        // Auto-discover local databases
+        try {
+          const dbRes = await fetch('http://127.0.0.1:4567/db/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              port: form.port || '5432',
+              username: form.username || 'postgres',
+              password: form.password || '',
+            }),
+          }).catch(() => null)
+
+          if (dbRes && dbRes.ok) {
+            const dbData = await dbRes.json()
+            if (dbData.databases && dbData.databases.length > 0) {
+              setDiscoveredDbs(dbData.databases)
+              // Auto-select first discovered database if empty
+              if (!form.database && dbData.databases[0]) {
+                setForm(prev => ({ ...prev, database: dbData.databases[0] }))
+              }
+            }
+          }
+        } catch {
+          // Ignore discovery errors
+        }
+      } else {
+        setAgentStatus('offline')
+        setAgentMessage('💡 Visio Agent desktop app is not detected on your computer. Download Visio Agent or use the manual tunnel guide below!')
+      }
+    } catch (err: any) {
+      setAgentStatus('offline')
+      setAgentMessage('💡 Visio Agent is offline. Download Visio Agent or use the manual tunnel guide below!')
+    }
+    setIsBridging(false)
+  }
 
   /* ── Handlers ── */
   const set = (field: keyof FormData, value: string | boolean) => {
@@ -317,150 +461,441 @@ export default function CreateConnectionPage() {
                 )}
               </div>
 
-              {/* Professional Step-by-Step Local Tunnel Wizard */}
+              {/* ── OPTION A: SENIOR UI/UX HERO DESKTOP AGENT CARD ── */}
               {!isSqlite && targetMode === 'tunnel' && (
-                <div className="p-5 bg-card/90 border border-amber-500/30 rounded-xl shadow-lg space-y-4">
-                  {/* Header */}
-                  <div className="flex items-center justify-between border-b border-border pb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-amber-500/20 flex items-center justify-center text-amber-400">
-                        <Zap className="w-3.5 h-3.5" />
+                <div className="p-5 bg-gradient-to-br from-slate-900/90 via-blue-950/40 to-slate-900/90 border border-blue-500/30 rounded-2xl shadow-xl space-y-4 backdrop-blur-md">
+                  
+                  {/* Card Header & Status */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-500/20">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 border border-blue-400/40 flex items-center justify-center text-white shadow-lg shrink-0">
+                        <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
                       </div>
                       <div>
-                        <p className="text-xs font-bold text-foreground">Local Database Tunnel Guide</p>
-                        <p className="text-[11px] text-muted-foreground">Follow these 3 simple steps to bridge your local laptop database to production.</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-foreground tracking-wide">Visio Desktop Agent</p>
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1.5 border shadow-sm ${
+                            agentStatus === 'active'
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40'
+                              : agentStatus === 'checking'
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                              : 'bg-secondary/80 text-muted-foreground border-border'
+                          }`}>
+                            <span className={`w-2 h-2 rounded-full ${
+                              agentStatus === 'active' ? 'bg-emerald-400 animate-ping' : agentStatus === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-muted-foreground'
+                            }`} />
+                            {agentStatus === 'active' ? 'Agent Active (127.0.0.1:4567)' : agentStatus === 'checking' ? 'Connecting to Agent...' : 'Standby / App Not Detected'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Automated local-to-cloud bridge &amp; database discovery</p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                      TLS Encrypted
-                    </span>
+
+                    <button
+                      type="button"
+                      onClick={checkAgentHealth}
+                      title="Re-check Agent Connection"
+                      className="self-start sm:self-center px-2.5 py-1 rounded-lg bg-secondary/80 hover:bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border flex items-center gap-1 transition-colors"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${agentStatus === 'checking' ? 'animate-spin' : ''}`} />
+                      <span>Refresh Agent</span>
+                    </button>
                   </div>
 
-                  {/* STEP 1 */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                        <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">1</span>
-                        Install `cloudflared` (One-time setup on your machine)
-                      </span>
-                      <div className="flex items-center gap-1 text-[10px]">
-                        <button
-                          type="button"
-                          onClick={() => setActiveOs('mac')}
-                          className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'mac' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
-                          macOS
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveOs('linux')}
-                          className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'linux' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
-                          Linux
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveOs('win')}
-                          className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'win' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
-                          Windows
-                        </button>
+                  {/* Local Credentials Sub-Card */}
+                  <div className="p-4 rounded-xl bg-background/60 border border-border/80 space-y-3">
+                    <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      Local Database Credentials &amp; Port
+                    </p>
+
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      {/* Port */}
+                      <div>
+                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Local Port</label>
+                        <Input
+                          placeholder="5432"
+                          value={form.port}
+                          onChange={e => set('port', e.target.value)}
+                          className="bg-background/90 h-9 text-xs font-mono"
+                        />
+                      </div>
+
+                      {/* Username */}
+                      <div>
+                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Username</label>
+                        <Input
+                          placeholder="postgres"
+                          value={form.username}
+                          onChange={e => set('username', e.target.value)}
+                          className="bg-background/90 h-9 text-xs"
+                        />
+                      </div>
+
+                      {/* Password */}
+                      <div>
+                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Password</label>
+                        <div className="relative">
+                          <Input
+                            type={showPassword ? 'text' : 'password'}
+                            placeholder="••••••••"
+                            value={form.password}
+                            onChange={e => set('password', e.target.value)}
+                            className="bg-background/90 h-9 text-xs pr-8"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px]"
+                          >
+                            {showPassword ? 'Hide' : 'Show'}
+                          </button>
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                      <code className="font-mono text-[11px] text-foreground overflow-x-auto block max-w-[420px] whitespace-nowrap">
-                        {activeOs === 'mac' && 'brew install cloudflared'}
-                        {activeOs === 'linux' && 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'}
-                        {activeOs === 'win' && 'winget install Cloudflare.cloudflared'}
-                      </code>
+                    {/* Primary CTA Button */}
+                    <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                       <button
                         type="button"
-                        onClick={() => copyToClipboard(
-                          activeOs === 'mac'
-                            ? 'brew install cloudflared'
-                            : activeOs === 'linux'
-                            ? 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'
-                            : 'winget install Cloudflare.cloudflared',
-                          'inst'
-                        )}
-                        className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
+                        onClick={trigger1ClickAutoBridge}
+                        disabled={isBridging}
+                        className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition-all transform active:scale-95 disabled:opacity-50"
                       >
-                        {copiedCmd === 'inst' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                        {copiedCmd === 'inst' ? 'Copied' : 'Copy'}
+                        {isBridging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current text-amber-300" />}
+                        {isBridging ? 'Bridging & Discovering DBs...' : '⚡ Auto-Bridge & Discover Local DBs'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={fetchDiscoveredDatabases}
+                        className="px-3 py-2 rounded-lg bg-secondary/80 hover:bg-secondary text-xs font-medium text-muted-foreground hover:text-foreground border border-border flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                        Scan DBs Only
                       </button>
                     </div>
                   </div>
 
-                  {/* STEP 2 */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                        <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">2</span>
-                        Choose Execution Mode
-                      </span>
-                      <div className="flex items-center gap-1 text-[10px]">
+                  {/* Feedback Banner */}
+                  {agentMessage && (
+                    <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 text-xs text-blue-300 flex items-center gap-2 animate-in fade-in duration-200">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>{agentMessage}</span>
+                    </div>
+                  )}
+
+                  {dbScanError && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2 animate-in fade-in duration-200">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>{dbScanError}</span>
+                    </div>
+                  )}
+
+                  {agentStatus === 'offline' && (
+                    <div className="p-4 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                            <Laptop className="w-4 h-4 text-amber-400" />
+                            Visio Desktop Agent Not Running
+                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            Run the zero-install command below or download the desktop app to enable 1-click local DB auto-bridging.
+                          </p>
+                        </div>
+
+                        <a
+                          href="https://github.com/visio-app/releases/latest"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-xs font-bold text-blue-300 transition-colors shrink-0"
+                        >
+                          <Download className="w-3.5 h-3.5" /> Download App Binary
+                        </a>
+                      </div>
+
+                      {/* NPX Instant Copy Command */}
+                      <div className="p-2.5 rounded-lg bg-black/60 border border-border flex items-center justify-between gap-2 font-mono text-xs">
+                        <span className="text-emerald-400 font-semibold truncate">
+                          npx visio-agent
+                        </span>
                         <button
                           type="button"
-                          onClick={() => setTunnelServiceMode('quick')}
-                          className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'quick' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                          onClick={() => {
+                            navigator.clipboard.writeText('npx visio-agent')
+                            setCopiedCmd('npx visio-agent')
+                            setTimeout(() => setCopiedCmd(null), 2000)
+                          }}
+                          className="px-2 py-1 rounded bg-secondary hover:bg-secondary/80 text-[11px] text-foreground flex items-center gap-1 shrink-0 transition-colors"
                         >
-                          ⚡ Quick Dev Mode
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTunnelServiceMode('daemon')}
-                          className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'daemon' ? 'bg-blue-500/20 text-blue-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                        >
-                          🔄 24/7 Background Service
+                          {copiedCmd === 'npx visio-agent' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-muted-foreground" />}
+                          {copiedCmd === 'npx visio-agent' ? 'Copied NPX!' : 'Copy NPX'}
                         </button>
                       </div>
                     </div>
+                  )}
+                </div>
+              )}
 
-                    {tunnelServiceMode === 'quick' ? (
-                      <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                        <code className="font-mono text-[11px] text-amber-300">
-                          cloudflared tunnel --url tcp://localhost:5432
-                        </code>
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard('cloudflared tunnel --url tcp://localhost:5432', 'run')}
-                          className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
-                        >
-                          {copiedCmd === 'run' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                          {copiedCmd === 'run' ? 'Copied' : 'Copy'}
-                        </button>
+              {/* Professional Step-by-Step Local Tunnel Wizard */}
+              {!isSqlite && targetMode === 'tunnel' && (
+                <div className="p-5 bg-card/90 border border-amber-500/30 rounded-xl shadow-lg space-y-4">
+                  {/* Header & Sub-mode Selector */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-md bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+                        <Zap className="w-3.5 h-3.5" />
                       </div>
-                    ) : (
-                      <div className="p-2.5 rounded-lg bg-background border border-border space-y-2">
-                        <p className="text-[11px] text-muted-foreground">Run once to install as a system service that auto-starts at system boot:</p>
-                        <div className="flex items-center justify-between bg-muted/40 p-2 rounded">
-                          <code className="font-mono text-[11px] text-blue-300">
-                            sudo cloudflared service install
+                      <div>
+                        <p className="text-xs font-bold text-foreground">Local Database Tunnel Guide</p>
+                        <p className="text-[11px] text-muted-foreground">Expose local databases securely to production.</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 p-0.5 bg-muted/60 rounded-lg border border-border shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setBridgeType('permanent')}
+                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                          bridgeType === 'permanent'
+                            ? 'bg-amber-500 text-black shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        🌟 Permanent 24/7 Bridge
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBridgeType('quick')}
+                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
+                          bridgeType === 'quick'
+                            ? 'bg-amber-500/20 text-amber-300 shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        ⚡ Quick Dev Tunnel
+                      </button>
+                    </div>
+                  </div>
+
+                  {bridgeType === 'permanent' ? (
+                    /* ── PERMANENT MULTI-DB BRIDGE (ONE-TIME SETUP) ── */
+                    <div className="space-y-4">
+                      <div className="p-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg text-xs text-amber-300 leading-relaxed">
+                        ✨ <strong>Set up ONCE for all your local databases:</strong> This configures a single permanent background bridge on your laptop that handles unlimited local databases (Postgres, MySQL, Staging) without changing URLs or re-running commands after reboots.
+                      </div>
+
+                      {/* STEP 1 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">1</span>
+                            Authenticate & Create Named Tunnel (One-time)
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
+                          <code className="font-mono text-[11px] text-foreground overflow-x-auto block max-w-[420px] whitespace-nowrap">
+                            cloudflared tunnel login &amp;&amp; cloudflared tunnel create visio-bridge
                           </code>
                           <button
                             type="button"
-                            onClick={() => copyToClipboard('sudo cloudflared service install', 'daemon')}
-                            className="text-muted-foreground hover:text-blue-400 flex items-center gap-1 text-[10px]"
+                            onClick={() => copyToClipboard('cloudflared tunnel login && cloudflared tunnel create visio-bridge', 'perm-step1')}
+                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
                           >
-                            {copiedCmd === 'daemon' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                            {copiedCmd === 'daemon' ? 'Copied' : 'Copy'}
+                            {copiedCmd === 'perm-step1' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            {copiedCmd === 'perm-step1' ? 'Copied' : 'Copy'}
                           </button>
                         </div>
                       </div>
-                    )}
-                  </div>
 
-                  {/* STEP 3 */}
-                  <div className="space-y-2">
-                    <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                      <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">3</span>
-                      Paste your generated tunnel hostname in Host below
-                    </span>
-                    <p className="text-[11px] text-muted-foreground leading-relaxed pl-5">
-                      Terminal will output a hostname like <code className="text-amber-400 font-mono">abc123xyz.trycloudflare.com</code> or your domain <code className="text-blue-400 font-mono">db.mycompany.com</code>. Paste it into the Host field.
-                    </p>
-                  </div>
+                      {/* STEP 2 */}
+                      <div className="space-y-2">
+                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">2</span>
+                          Multi-DB Ingress Config (<code className="text-amber-300 font-mono">~/.cloudflared/config.yml</code>)
+                        </span>
+                        <div className="p-2.5 bg-background border border-border rounded-lg space-y-1">
+                          <div className="flex items-center justify-between border-b border-border/50 pb-1 mb-1">
+                            <span className="text-[10px] text-muted-foreground font-mono">config.yml (Route multiple local DBs easily)</span>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(
+                                `tunnel: visio-bridge\ncredentials-file: ~/.cloudflared/visio-bridge.json\n\ningress:\n  - hostname: db.mycompany.com\n    service: tcp://localhost:5432\n  - service: http_status:404`,
+                                'perm-yaml'
+                              )}
+                              className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
+                            >
+                              {copiedCmd === 'perm-yaml' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              {copiedCmd === 'perm-yaml' ? 'Copied' : 'Copy Config'}
+                            </button>
+                          </div>
+                          <pre className="font-mono text-[10px] text-amber-200/90 leading-relaxed overflow-x-auto">
+{`tunnel: visio-bridge
+credentials-file: ~/.cloudflared/visio-bridge.json
+
+ingress:
+  - hostname: db.mycompany.com
+    service: tcp://localhost:5432
+  - service: http_status:404`}
+                          </pre>
+                        </div>
+                      </div>
+
+                      {/* STEP 3 */}
+                      <div className="space-y-2">
+                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">3</span>
+                          Route DNS & Start 24/7 Auto-Boot Service
+                        </span>
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
+                          <code className="font-mono text-[11px] text-blue-300 overflow-x-auto block max-w-[420px] whitespace-nowrap">
+                            cloudflared tunnel route dns visio-bridge db.mycompany.com &amp;&amp; cloudflared tunnel run visio-bridge
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard('cloudflared tunnel route dns visio-bridge db.mycompany.com && cloudflared tunnel run visio-bridge', 'perm-step3')}
+                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
+                          >
+                            {copiedCmd === 'perm-step3' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            {copiedCmd === 'perm-step3' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── QUICK DEV TUNNEL (TEMPORARY 5-SECOND TEST) ── */
+                    <div className="space-y-4">
+                      {/* STEP 1 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">1</span>
+                            Install `cloudflared` (One-time setup on your machine)
+                          </span>
+                          <div className="flex items-center gap-1 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setActiveOs('mac')}
+                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'mac' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              macOS
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveOs('linux')}
+                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'linux' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              Linux
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActiveOs('win')}
+                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'win' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              Windows
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
+                          <code className="font-mono text-[11px] text-foreground overflow-x-auto block max-w-[420px] whitespace-nowrap">
+                            {activeOs === 'mac' && 'brew install cloudflared'}
+                            {activeOs === 'linux' && 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'}
+                            {activeOs === 'win' && 'winget install Cloudflare.cloudflared'}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(
+                              activeOs === 'mac'
+                                ? 'brew install cloudflared'
+                                : activeOs === 'linux'
+                                ? 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'
+                                : 'winget install Cloudflare.cloudflared',
+                              'inst'
+                            )}
+                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
+                          >
+                            {copiedCmd === 'inst' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            {copiedCmd === 'inst' ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* STEP 2 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">2</span>
+                            Choose Execution Mode
+                          </span>
+                          <div className="flex items-center gap-1 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setTunnelServiceMode('quick')}
+                              className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'quick' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              ⚡ Foreground Mode
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setTunnelServiceMode('daemon')}
+                              className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'daemon' ? 'bg-blue-500/20 text-blue-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                              🔄 Background Process
+                            </button>
+                          </div>
+                        </div>
+
+                        {tunnelServiceMode === 'quick' ? (
+                          <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
+                            <code className="font-mono text-[11px] text-amber-300">
+                              cloudflared tunnel --url tcp://localhost:5432
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard('cloudflared tunnel --url tcp://localhost:5432', 'run')}
+                              className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
+                            >
+                              {copiedCmd === 'run' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              {copiedCmd === 'run' ? 'Copied' : 'Copy'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="p-2.5 rounded-lg bg-background border border-border space-y-2">
+                            <p className="text-[11px] text-muted-foreground">Run in background (continues running even when terminal is closed):</p>
+                            <div className="flex items-center justify-between bg-muted/40 p-2 rounded">
+                              <code className="font-mono text-[11px] text-blue-300 overflow-x-auto block max-w-[400px] whitespace-nowrap">
+                                nohup cloudflared tunnel --url tcp://localhost:5432 &gt; cloudflared.log 2&gt;&amp;1 &amp;
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard('nohup cloudflared tunnel --url tcp://localhost:5432 > cloudflared.log 2>&1 &', 'daemon')}
+                                className="text-muted-foreground hover:text-blue-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
+                              >
+                                {copiedCmd === 'daemon' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                {copiedCmd === 'daemon' ? 'Copied' : 'Copy'}
+                              </button>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground/80">
+                              💡 Run <code className="text-blue-400 font-mono">cat cloudflared.log \| grep trycloudflare.com</code> to see your active background tunnel URL!
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* STEP 3 */}
+                      <div className="space-y-2">
+                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">3</span>
+                          Paste your generated tunnel hostname in Host below
+                        </span>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed pl-5">
+                          Terminal will output a hostname like <code className="text-amber-400 font-mono">abc123xyz.trycloudflare.com</code> or your domain <code className="text-blue-400 font-mono">db.mycompany.com</code>. Paste it into the Host field.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -508,12 +943,54 @@ export default function CreateConnectionPage() {
                 error={errors.database}
                 hint={isSqlite ? 'Path to your SQLite file e.g. ./data.db' : 'The database name to connect to'}
               >
-                <Input
-                  placeholder={isSqlite ? './data.db' : 'my_database'}
-                  value={form.database}
-                  onChange={e => set('database', e.target.value)}
-                  className={`bg-background h-10 ${errors.database ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={isSqlite ? './data.db' : 'my_database'}
+                    value={form.database}
+                    onChange={e => set('database', e.target.value)}
+                    className={`bg-background h-10 ${errors.database ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                  />
+                  {targetMode === 'tunnel' && (
+                    <button
+                      type="button"
+                      onClick={fetchDiscoveredDatabases}
+                      className="px-3 py-2 rounded-lg bg-secondary/80 hover:bg-secondary text-xs font-semibold text-foreground border border-border flex items-center gap-1.5 shrink-0 transition-colors"
+                      title="Scan local databases via Visio Agent"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+                      Scan Local DBs
+                    </button>
+                  )}
+                </div>
+
+                {dbScanError && (
+                  <p className="text-[11px] text-amber-400 font-medium pt-1 flex items-center gap-1">
+                    <span>💡 {dbScanError}</span>
+                  </p>
+                )}
+
+                {discoveredDbs.length > 0 && (
+                  <div className="flex items-center gap-1.5 pt-1.5 flex-wrap">
+                    <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                      <Sparkles className="w-3 h-3 text-amber-300 animate-pulse" />
+                      Discovered Local DBs:
+                    </span>
+                    {discoveredDbs.map(db => (
+                      <button
+                        key={db}
+                        type="button"
+                        onClick={() => set('database', db)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all border ${
+                          form.database === db
+                            ? 'bg-blue-600 text-white border-blue-500 shadow-sm font-semibold'
+                            : 'bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted border-border'
+                        }`}
+                      >
+                        {db}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </Field>
             </section>
 

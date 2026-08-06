@@ -25,19 +25,29 @@ export async function withPostgres<T>(
   config: DbConfig,
   fn: (query: QueryFn) => Promise<T>,
 ): Promise<T> {
+  const cleanHost = (config.host || '')
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .trim()
+
+  const isTryCloudflare = cleanHost.endsWith('.trycloudflare.com')
   const isLoopback =
-    config.host === 'localhost'  ||
-    config.host === '127.0.0.1'  ||
-    config.host?.startsWith('::1')
+    cleanHost === 'localhost'  ||
+    cleanHost === '127.0.0.1'  ||
+    cleanHost?.startsWith('::1')
+
+  const isVercel = process.env.VERCEL === '1' || Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV)
+  // In local development, loopback/trycloudflare maps to 127.0.0.1; in Vercel production, uses cleanHost tunnel
+  const targetHost = (!isVercel && (isLoopback || isTryCloudflare)) ? '127.0.0.1' : cleanHost
+  const targetPort = Number(config.port) || 5432
 
   const client = new Client({
-    host:     config.host,
-    port:     config.port,
+    host:     targetHost,
+    port:     targetPort,
     database: config.database,
     user:     config.username,   // pg uses `user` not `username`
     password: config.password,
-    // Strip SSL for loopback to avoid TLS handshake failure on local dev
-    ssl: config.ssl && !isLoopback
+    ssl: config.ssl && !isLoopback && !isTryCloudflare
       ? { rejectUnauthorized: false }
       : false,
     connectionTimeoutMillis: 15_000,
