@@ -285,3 +285,104 @@ async function resolveCompatibleTargetColumn(
     `and no compatible identifier column exists on "${targetTable}".`,
   )
 }
+
+// ─── Data Editing Mutations (CRUD) ─────────────────────────────────────────
+
+export interface InsertRowParams {
+  tableName: string
+  data: Record<string, any>
+}
+
+export interface UpdateRowParams {
+  tableName: string
+  primaryKey: Record<string, any>
+  data: Record<string, any>
+}
+
+export interface DeleteRowParams {
+  tableName: string
+  primaryKey: Record<string, any>
+}
+
+export async function insertRow(
+  query: QueryFn,
+  params: InsertRowParams,
+): Promise<Record<string, any>> {
+  const { tableName, data } = params
+  assertSafeIdentifier(tableName, 'table name')
+
+  const keys = Object.keys(data)
+  if (keys.length === 0) throw new Error('No data provided for insertion')
+
+  keys.forEach(k => assertSafeIdentifier(k, 'column name'))
+
+  const cols = keys.map(k => `"${k}"`).join(', ')
+  const placeholders = keys.map((_, i) => `$${i + 1}`).join(', ')
+  const values = keys.map(k => data[k])
+
+  const sql = `INSERT INTO "${tableName}" (${cols}) VALUES (${placeholders}) RETURNING *`
+  const rows = await query<Record<string, any>>(sql, values)
+  return rows[0] ?? data
+}
+
+export async function updateRow(
+  query: QueryFn,
+  params: UpdateRowParams,
+): Promise<Record<string, any>> {
+  const { tableName, primaryKey, data } = params
+  assertSafeIdentifier(tableName, 'table name')
+
+  const updateKeys = Object.keys(data)
+  const pkKeys = Object.keys(primaryKey)
+
+  if (updateKeys.length === 0) throw new Error('No fields provided to update')
+  if (pkKeys.length === 0) throw new Error('Primary key condition is required for update')
+
+  updateKeys.forEach(k => assertSafeIdentifier(k, 'column name'))
+  pkKeys.forEach(k => assertSafeIdentifier(k, 'primary key column'))
+
+  let idx = 1
+  const setClauses: string[] = []
+  const values: any[] = []
+
+  for (const key of updateKeys) {
+    setClauses.push(`"${key}" = $${idx++}`)
+    values.push(data[key])
+  }
+
+  const whereClauses: string[] = []
+  for (const key of pkKeys) {
+    whereClauses.push(`"${key}" = $${idx++}`)
+    values.push(primaryKey[key])
+  }
+
+  const sql = `UPDATE "${tableName}" SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')} RETURNING *`
+  const rows = await query<Record<string, any>>(sql, values)
+  return rows[0] ?? { ...primaryKey, ...data }
+}
+
+export async function deleteRow(
+  query: QueryFn,
+  params: DeleteRowParams,
+): Promise<{ success: boolean }> {
+  const { tableName, primaryKey } = params
+  assertSafeIdentifier(tableName, 'table name')
+
+  const pkKeys = Object.keys(primaryKey)
+  if (pkKeys.length === 0) throw new Error('Primary key condition is required for deletion')
+
+  pkKeys.forEach(k => assertSafeIdentifier(k, 'primary key column'))
+
+  let idx = 1
+  const whereClauses: string[] = []
+  const values: any[] = []
+
+  for (const key of pkKeys) {
+    whereClauses.push(`"${key}" = $${idx++}`)
+    values.push(primaryKey[key])
+  }
+
+  const sql = `DELETE FROM "${tableName}" WHERE ${whereClauses.join(' AND ')}`
+  await query(sql, values)
+  return { success: true }
+}

@@ -9,7 +9,7 @@ import {
   Key, Link2, Hash, ToggleLeft, Calendar,
   SortAsc, SortDesc, Filter, RefreshCw,
   PanelLeftClose, PanelLeftOpen, Rows3,
-  ExternalLink, Info, AlertCircle,
+  ExternalLink, Info, AlertCircle, Plus, Pencil, Trash2, Save, CheckCircle2,
   Link as LucideLink,
 } from 'lucide-react'
 
@@ -206,6 +206,117 @@ export default function VisualizePage() {
   const [rowFilter,   setRowFilter]   = useState('')
   const [page,        setPage]        = useState(0)
   const [orderBy,     setOrderBy]     = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
+
+  /* ── Row Mutation State ── */
+  const [insertModalOpen, setInsertModalOpen] = useState(false)
+  const [editModalOpen,   setEditModalOpen]   = useState(false)
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [selectedRowData, setSelectedRowData] = useState<Record<string, any> | null>(null)
+  const [formData,        setFormData]        = useState<Record<string, any>>({})
+  const [mutationLoading, setMutationLoading] = useState(false)
+  const [mutationError,   setMutationError]   = useState<string | null>(null)
+  const [toastMessage,    setToastMessage]    = useState<string | null>(null)
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg)
+    setTimeout(() => setToastMessage(null), 3000)
+  }
+
+  const handleOpenInsert = () => {
+    if (!currentTableSchema) return
+    const initial: Record<string, any> = {}
+    currentTableSchema.columns.forEach(col => {
+      if (!col.isPrimaryKey) initial[col.name] = ''
+    })
+    setFormData(initial)
+    setMutationError(null)
+    setInsertModalOpen(true)
+  }
+
+  const handleInsertSubmit = async () => {
+    if (!selectedTable) return
+    setMutationLoading(true)
+    setMutationError(null)
+    try {
+      await api.post(`/db-agent/${connectionId}/rows`, {
+        tableName: selectedTable,
+        data: formData,
+      })
+      setInsertModalOpen(false)
+      showToast('Row inserted successfully!')
+      queryTable(selectedTable, page, orderBy)
+    } catch (err: any) {
+      setMutationError(err?.response?.data?.error ?? err?.message ?? 'Failed to insert row')
+    } finally {
+      setMutationLoading(false)
+    }
+  }
+
+  const handleOpenEdit = (row: Record<string, any>) => {
+    setSelectedRowData(row)
+    setFormData({ ...row })
+    setMutationError(null)
+    setEditModalOpen(true)
+  }
+
+  const handleEditSubmit = async () => {
+    if (!selectedTable || !selectedRowData || !currentTableSchema) return
+    const rowId = resolveRowId(selectedRowData, currentTableSchema.columns)
+    if (!rowId) {
+      setMutationError('Could not resolve primary key for row update')
+      return
+    }
+
+    setMutationLoading(true)
+    setMutationError(null)
+    try {
+      await api.put(`/db-agent/${connectionId}/rows`, {
+        tableName: selectedTable,
+        primaryKey: { [rowId.column]: rowId.value },
+        data: formData,
+      })
+      setEditModalOpen(false)
+      showToast('Row updated successfully!')
+      queryTable(selectedTable, page, orderBy)
+    } catch (err: any) {
+      setMutationError(err?.response?.data?.error ?? err?.message ?? 'Failed to update row')
+    } finally {
+      setMutationLoading(false)
+    }
+  }
+
+  const handleOpenDelete = (row: Record<string, any>) => {
+    setSelectedRowData(row)
+    setMutationError(null)
+    setDeleteModalOpen(true)
+  }
+
+  const handleDeleteSubmit = async () => {
+    if (!selectedTable || !selectedRowData || !currentTableSchema) return
+    const rowId = resolveRowId(selectedRowData, currentTableSchema.columns)
+    if (!rowId) {
+      setMutationError('Could not resolve primary key for row deletion')
+      return
+    }
+
+    setMutationLoading(true)
+    setMutationError(null)
+    try {
+      await api.delete(`/db-agent/${connectionId}/rows`, {
+        data: {
+          tableName: selectedTable,
+          primaryKey: { [rowId.column]: rowId.value },
+        },
+      })
+      setDeleteModalOpen(false)
+      showToast('Row deleted successfully!')
+      queryTable(selectedTable, page, orderBy)
+    } catch (err: any) {
+      setMutationError(err?.response?.data?.error ?? err?.message ?? 'Failed to delete row')
+    } finally {
+      setMutationLoading(false)
+    }
+  }
 
   /* ─────────────────────────────────────────────────────────────────────────
      LOAD SCHEMA
@@ -667,19 +778,28 @@ export default function VisualizePage() {
                 <span className="text-xs text-muted-foreground">+{currentTableSchema.columns.length - 5} more</span>
               )}
             </div>
-            <div className="relative shrink-0">
-              <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
-              <input
-                placeholder="Filter rows..."
-                value={rowFilter}
-                onChange={e => setRowFilter(e.target.value)}
-                className="h-7 pl-7 pr-7 text-xs bg-background border border-border rounded-lg w-36 sm:w-44 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
-              />
-              {rowFilter && (
-                <button onClick={() => setRowFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="relative">
+                <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+                <input
+                  placeholder="Filter rows..."
+                  value={rowFilter}
+                  onChange={e => setRowFilter(e.target.value)}
+                  className="h-7 pl-7 pr-7 text-xs bg-background border border-border rounded-lg w-36 sm:w-44 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
+                />
+                {rowFilter && (
+                  <button onClick={() => setRowFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={handleOpenInsert}
+                className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg flex items-center gap-1.5 transition-colors shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Row
+              </button>
             </div>
           </div>
         )}
@@ -750,6 +870,9 @@ export default function VisualizePage() {
                             Relations
                           </th>
                         )}
+                        <th className="px-4 py-2.5 text-center text-xs text-muted-foreground font-semibold whitespace-nowrap">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -797,6 +920,24 @@ export default function VisualizePage() {
                                 </div>
                               </td>
                             )}
+                            <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  onClick={() => handleOpenEdit(row)}
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+                                  title="Edit Row"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleOpenDelete(row)}
+                                  className="p-1.5 rounded-md text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                  title="Delete Row"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         )
                       })}
@@ -861,6 +1002,183 @@ export default function VisualizePage() {
           </span>
         </div>
       </div>
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-10 right-10 z-50 flex items-center gap-2 px-4 py-3 bg-emerald-500 text-white rounded-lg shadow-xl text-xs font-semibold animate-in fade-in slide-in-from-bottom-2">
+          <CheckCircle2 className="w-4 h-4" />
+          {toastMessage}
+        </div>
+      )}
+
+      {/* Insert Row Modal */}
+      {insertModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setInsertModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <Plus className="w-4 h-4 text-blue-400" />
+                <h3 className="text-base font-semibold text-foreground">Insert Row into {selectedTable}</h3>
+              </div>
+              <button onClick={() => setInsertModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {mutationError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {mutationError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {currentTableSchema?.columns.map(col => {
+                if (col.isPrimaryKey) return null
+                return (
+                  <div key={col.name} className="space-y-1">
+                    <label className="text-xs font-medium text-foreground flex items-center justify-between">
+                      <span>{col.name}</span>
+                      <span className="text-[10px] text-muted-foreground">({col.dataType})</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData[col.name] ?? ''}
+                      onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
+                      placeholder={`Enter ${col.name}...`}
+                      className="w-full h-8 px-3 text-xs bg-background border border-border rounded-lg focus:outline-none focus:border-blue-500/50 text-foreground"
+                    />
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+              <button
+                onClick={() => setInsertModalOpen(false)}
+                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleInsertSubmit}
+                disabled={mutationLoading}
+                className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                Insert Row
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Row Modal */}
+      {editModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-blue-400" />
+                <h3 className="text-base font-semibold text-foreground">Edit Row in {selectedTable}</h3>
+              </div>
+              <button onClick={() => setEditModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {mutationError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {mutationError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {currentTableSchema?.columns.map(col => {
+                return (
+                  <div key={col.name} className="space-y-1">
+                    <label className="text-xs font-medium text-foreground flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        {col.name} {col.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400" />}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">({col.dataType})</span>
+                    </label>
+                    <input
+                      type="text"
+                      disabled={col.isPrimaryKey}
+                      value={formatCellValue(formData[col.name])}
+                      onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
+                      className={`w-full h-8 px-3 text-xs bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-blue-500/50 ${col.isPrimaryKey ? 'opacity-60 cursor-not-allowed bg-muted/30' : ''}`}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+              <button
+                onClick={() => setEditModalOpen(false)}
+                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEditSubmit}
+                disabled={mutationLoading}
+                className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Row Confirmation Modal */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDeleteModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-md bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Trash2 className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Delete Row</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Are you sure you want to delete this row from <span className="font-medium text-foreground">{selectedTable}</span>? This action cannot be undone.</p>
+              </div>
+            </div>
+
+            {mutationError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {mutationError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+              <button
+                onClick={() => setDeleteModalOpen(false)}
+                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteSubmit}
+                disabled={mutationLoading}
+                className="px-4 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Delete Row
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
