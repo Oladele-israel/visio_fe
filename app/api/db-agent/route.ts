@@ -59,6 +59,11 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'name, type, and database are required' }, { status: 400 })
     }
 
+    const cleanHost = (host || '')
+      .replace(/^https?:\/\//, '')
+      .replace(/\/.*$/, '')
+      .trim()
+
     const dbType = DB_TYPE_MAP[type?.toLowerCase()]
     if (!dbType) {
       return Response.json({ error: `Unknown db type: ${type}` }, { status: 400 })
@@ -67,7 +72,7 @@ export async function POST(req: NextRequest) {
     // Test connection before saving
     try {
       await withPostgres(
-        { host, port, database, username, password, ssl },
+        { host: cleanHost, port, database, username, password, ssl },
         (query) => query('SELECT 1'),
       )
     } catch (err: any) {
@@ -81,7 +86,7 @@ export async function POST(req: NextRequest) {
       data: {
         name,
         type:              dbType,
-        host,
+        host:              cleanHost,
         port:              Number(port),
         database,
         username,
