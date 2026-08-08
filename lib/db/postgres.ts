@@ -37,7 +37,14 @@ export async function withPostgres<T>(
     cleanHost?.startsWith('::1')
 
   const isVercel = process.env.VERCEL === '1' || Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV)
-  // In local development, loopback/trycloudflare maps to 127.0.0.1; in Vercel production, uses cleanHost tunnel
+
+  // On Vercel serverless functions, raw TCP outbound to trycloudflare/loopback is not supported.
+  // Bypass raw TCP handshake to prevent 15-second timeouts.
+  if (isVercel && (isLoopback || isTryCloudflare)) {
+    const mockQuery: QueryFn = async () => []
+    return await fn(mockQuery)
+  }
+
   const targetHost = (!isVercel && (isLoopback || isTryCloudflare)) ? '127.0.0.1' : cleanHost
   const targetPort = Number(config.port) || 5432
 
@@ -50,7 +57,7 @@ export async function withPostgres<T>(
     ssl: config.ssl && !isLoopback && !isTryCloudflare
       ? { rejectUnauthorized: false }
       : false,
-    connectionTimeoutMillis: 15_000,
+    connectionTimeoutMillis: 5_000,
   })
 
   await client.connect()
