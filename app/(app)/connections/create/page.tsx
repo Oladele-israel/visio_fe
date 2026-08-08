@@ -144,8 +144,8 @@ export default function CreateConnectionPage() {
   }
 
   /* Check for local Visio Agent */
-  const checkAgentHealth = async () => {
-    setAgentStatus('checking')
+  const checkAgentHealth = async (isSilent = false) => {
+    if (!isSilent) setAgentStatus('checking')
     try {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 1500)
@@ -155,8 +155,12 @@ export default function CreateConnectionPage() {
 
       clearTimeout(timeoutId)
       if (res && res.ok) {
-        setAgentStatus('active')
-        fetchDiscoveredDatabases()
+        setAgentStatus(prev => {
+          if (prev !== 'active') {
+            fetchDiscoveredDatabases()
+          }
+          return 'active'
+        })
       } else {
         setAgentStatus('offline')
       }
@@ -167,10 +171,10 @@ export default function CreateConnectionPage() {
 
   useEffect(() => {
     if (targetMode === 'tunnel') {
-      checkAgentHealth()
+      checkAgentHealth(false)
       const interval = setInterval(() => {
-        checkAgentHealth()
-      }, 3000)
+        checkAgentHealth(true) // Silent heartbeat check without UI flickers
+      }, 5000)
       return () => clearInterval(interval)
     }
   }, [targetMode])
