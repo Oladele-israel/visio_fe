@@ -172,10 +172,6 @@ export default function CreateConnectionPage() {
   useEffect(() => {
     if (targetMode === 'tunnel') {
       checkAgentHealth(false)
-      const interval = setInterval(() => {
-        checkAgentHealth(true) // Silent heartbeat check without UI flickers
-      }, 5000)
-      return () => clearInterval(interval)
     }
   }, [targetMode])
 
