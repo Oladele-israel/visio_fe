@@ -38,14 +38,55 @@ export async function withPostgres<T>(
 
   const isVercel = process.env.VERCEL === '1' || Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV)
 
-  const targetHost = (!isVercel && (isLoopback || isTryCloudflare)) ? '127.0.0.1' : cleanHost
+  // 1. Cloudflare Quick Tunnel / Agent Bridge handling
+  if (isTryCloudflare || (isVercel && isLoopback)) {
+    const agentUrl = cleanHost.startsWith('http') ? cleanHost : `https://${cleanHost}`
+
+    const queryFn: QueryFn = async (sql, params) => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 12000)
+
+      try {
+        const res = await fetch(`${agentUrl}/db/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config, sql, params }),
+          signal: controller.signal,
+        })
+        clearTimeout(timeoutId)
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          const msg = errData.message || errData.error || `Agent request failed with status ${res.status}`
+          throw new Error(msg)
+        }
+
+        const data = await res.json()
+        if (data.status === 'error') {
+          throw new Error(data.message || 'Database query error')
+        }
+        return data.rows ?? data
+      } catch (err: any) {
+        clearTimeout(timeoutId)
+        if (err.name === 'AbortError') {
+          throw new Error('timeout expired waiting for local Visio Agent bridge response')
+        }
+        throw err
+      }
+    }
+
+    return await fn(queryFn)
+  }
+
+  // 2. Direct TCP connection for cloud Postgres & local development
+  const targetHost = (!isVercel && isLoopback) ? '127.0.0.1' : cleanHost
   const targetPort = Number(config.port) || 5432
 
   const client = new Client({
     host:     targetHost,
     port:     targetPort,
     database: config.database,
-    user:     config.username,   // pg uses `user` not `username`
+    user:     config.username,
     password: config.password,
     ssl: config.ssl && !isLoopback && !isTryCloudflare
       ? { rejectUnauthorized: false }
@@ -56,10 +97,10 @@ export async function withPostgres<T>(
   await client.connect()
 
   try {
-    const query: QueryFn = (sql, params) =>
+    const queryFn: QueryFn = (sql, params) =>
       client.query(sql, params).then(r => r.rows)
 
-    return await fn(query)
+    return await fn(queryFn)
   } finally {
     await client.end().catch(() => {})
   }

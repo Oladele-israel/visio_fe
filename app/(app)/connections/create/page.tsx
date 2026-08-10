@@ -850,11 +850,11 @@ ingress:
                         {tunnelServiceMode === 'quick' ? (
                           <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
                             <code className="font-mono text-[11px] text-amber-300">
-                              cloudflared tunnel --url tcp://localhost:5432
+                              cloudflared tunnel --url http://localhost:4567
                             </code>
                             <button
                               type="button"
-                              onClick={() => copyToClipboard('cloudflared tunnel --url tcp://localhost:5432', 'run')}
+                              onClick={() => copyToClipboard('cloudflared tunnel --url http://localhost:4567', 'run')}
                               className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
                             >
                               {copiedCmd === 'run' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -866,11 +866,11 @@ ingress:
                             <p className="text-[11px] text-muted-foreground">Run in background (continues running even when terminal is closed):</p>
                             <div className="flex items-center justify-between bg-muted/40 p-2 rounded">
                               <code className="font-mono text-[11px] text-blue-300 overflow-x-auto block max-w-[400px] whitespace-nowrap">
-                                nohup cloudflared tunnel --url tcp://localhost:5432 &gt; cloudflared.log 2&gt;&amp;1 &amp;
+                                nohup cloudflared tunnel --url http://localhost:4567 &gt; cloudflared.log 2&gt;&amp;1 &amp;
                               </code>
                               <button
                                 type="button"
-                                onClick={() => copyToClipboard('nohup cloudflared tunnel --url tcp://localhost:5432 > cloudflared.log 2>&1 &', 'daemon')}
+                                onClick={() => copyToClipboard('nohup cloudflared tunnel --url http://localhost:4567 > cloudflared.log 2>&1 &', 'daemon')}
                                 className="text-muted-foreground hover:text-blue-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
                               >
                                 {copiedCmd === 'daemon' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
