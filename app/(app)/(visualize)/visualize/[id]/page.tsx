@@ -1,28 +1,28 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { useParams, useRouter }                       from 'next/navigation'
-import { api }                                        from '@/lib/api'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useParams, useRouter } from 'next/navigation'
+import { api } from '@/lib/api'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import {
-  Database, Table2, ChevronRight, ChevronDown,
-  Search, X, ArrowLeft, Loader2,
-  Key, Link2, Hash, ToggleLeft, Calendar,
-  SortAsc, SortDesc, Filter, RefreshCw,
-  PanelLeftClose, PanelLeftOpen, Rows3,
-  ExternalLink, Info, AlertCircle, Plus, Pencil, Trash2, Save, CheckCircle2,
-  Link as LucideLink,
+  Database, Table2, Key, Link2, ExternalLink,
+  ChevronRight, ChevronDown, ArrowLeft, RefreshCw,
+  Search, AlertCircle, Loader2, SortAsc, SortDesc,
+  Rows3, Filter, Plus, Pencil, Trash2, CheckCircle2,
+  Info, ToggleLeft, Calendar, Hash, X, PanelLeftClose,
+  PanelLeftOpen, Sparkles, Copy, Check, Eye, MoveHorizontal, WrapText, Maximize2
 } from 'lucide-react'
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TYPES
 ───────────────────────────────────────────────────────────────────────────── */
 interface Column {
-  name:         string
-  dataType:     string
-  isNullable:   boolean
-  isPrimaryKey: boolean
-  isUnique:     boolean
-  isIdentifier: boolean
+  name:          string
+  dataType:      string
+  isNullable:    boolean
+  isPrimaryKey:  boolean
+  isIdentifier?: boolean
 }
 
 interface Table {
@@ -31,12 +31,11 @@ interface Table {
 }
 
 interface Relation {
-  type:       'belongsTo' | 'hasMany'
   fromTable:  string
   fromColumn: string
   toTable:    string
   toColumn:   string
-  constraint: string
+  type:       'belongsTo' | 'hasMany'
 }
 
 interface QueryResult {
@@ -64,7 +63,6 @@ const PAGE_SIZE = 20
 
 /* ─────────────────────────────────────────────────────────────────────────────
    RESPONSE UNWRAPPERS
-   All Next.js API routes return { success: true, data: <payload> }
 ───────────────────────────────────────────────────────────────────────────── */
 function unwrapSchema(res: any): Table[] {
   const raw = res?.data?.data ?? res?.data
@@ -113,31 +111,28 @@ function formatCellValue(val: any): string {
   return String(val)
 }
 
-/**
- * Resolves the best row identifier.
- * Priority: isPrimaryKey → isIdentifier → column named "id"
- * Never uses "pk" — always prefer "id".
- */
 function resolveRowId(
-  row:     Record<string, any>,
-  columns: Column[] | undefined,
-): { column: string; value: string | number } | null {
-  if (!columns) return null
-
-  // 1. Explicit primary key
-  const pk = columns.find(c => c.isPrimaryKey)
-  if (pk && row[pk.name] != null) return { column: pk.name, value: row[pk.name] }
-
-  // 2. Any identifier column (unique + not nullable)
-  const identifier = columns.find(c => c.isIdentifier && row[c.name] != null)
-  if (identifier) return { column: identifier.name, value: row[identifier.name] }
-
-  // 3. Column literally named "id" — never "pk"
-  const idCol = columns.find(
-    c => c.name.toLowerCase() === 'id' && row[c.name] != null,
-  )
-  if (idCol) return { column: idCol.name, value: row[idCol.name] }
-
+  row: Record<string, any>,
+  cols?: Column[],
+): { column: string; value: any } | null {
+  if (cols) {
+    const pkCol = cols.find(c => c.isPrimaryKey)
+    if (pkCol && row[pkCol.name] !== undefined) {
+      return { column: pkCol.name, value: row[pkCol.name] }
+    }
+  }
+  if (row.id !== undefined && row.id !== null) {
+    return { column: 'id', value: row.id }
+  }
+  for (const k of Object.keys(row)) {
+    if (k.toLowerCase().endsWith('_id') && row[k] !== undefined) {
+      return { column: k, value: row[k] }
+    }
+  }
+  const firstKey = Object.keys(row)[0]
+  if (firstKey && row[firstKey] !== undefined) {
+    return { column: firstKey, value: row[firstKey] }
+  }
   return null
 }
 
@@ -184,7 +179,8 @@ export default function VisualizePage() {
   const connectionId = params.id as string
 
   /* ── Layout ── */
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen,       setSidebarOpen]       = useState(true)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   /* ── Schema ── */
   const [schema,         setSchema]         = useState<Table[]>([])
@@ -201,11 +197,12 @@ export default function VisualizePage() {
   const [breadcrumb,     setBreadcrumb]     = useState<BreadcrumbItem[]>([])
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set())
 
-  /* ── Controls ── */
-  const [tableSearch, setTableSearch] = useState('')
-  const [rowFilter,   setRowFilter]   = useState('')
-  const [page,        setPage]        = useState(0)
-  const [orderBy,     setOrderBy]     = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
+  /* ── Display Mode & Controls ── */
+  const [cellWrapMode, setCellWrapMode] = useState<'scroll' | 'wrap' | 'truncate'>('scroll')
+  const [tableSearch, setTableSearch]   = useState('')
+  const [rowFilter,   setRowFilter]     = useState('')
+  const [page,        setPage]          = useState(0)
+  const [orderBy,     setOrderBy]       = useState<{ column: string; direction: 'asc' | 'desc' } | null>(null)
 
   /* ── Row Mutation State ── */
   const [insertModalOpen, setInsertModalOpen] = useState(false)
@@ -217,18 +214,116 @@ export default function VisualizePage() {
   const [mutationError,   setMutationError]   = useState<string | null>(null)
   const [toastMessage,    setToastMessage]    = useState<string | null>(null)
 
+  /* ── Cell Inspector Modal State ── */
+  const [inspectModalOpen, setInspectModalOpen] = useState(false)
+  const [inspectCellData, setInspectCellData]  = useState<{ col: string; val: any } | null>(null)
+
+  const handleInspectCell = (col: string, val: any) => {
+    setInspectCellData({ col, val })
+    setInspectModalOpen(true)
+  }
+
   const showToast = (msg: string) => {
     setToastMessage(msg)
     setTimeout(() => setToastMessage(null), 3000)
   }
 
+  const copyCellContent = (val: any) => {
+    if (val == null) return
+    const text = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val)
+    navigator.clipboard.writeText(text)
+    showToast('Copied cell to clipboard!')
+  }
+
+  /* ── Load Schema ── */
+  const loadSchema = useCallback(async () => {
+    setSchemaLoading(true)
+    setSchemaError(null)
+    try {
+      const [resSchema, resAgent] = await Promise.all([
+        api.get(`/db-agent/${connectionId}/schema`),
+        api.get(`/db-agent/${connectionId}`).catch(() => null),
+      ])
+
+      const loaded = unwrapSchema(resSchema)
+      setSchema(loaded)
+
+      if (resAgent) {
+        const name = unwrapConnectionName(resAgent)
+        if (name) setConnectionName(name)
+      }
+
+      if (loaded.length > 0 && !selectedTable) {
+        const first = loaded[0].name
+        setSelectedTable(first)
+        setBreadcrumb([{ table: first, label: first }])
+        queryTable(first, 0, null)
+        loadRelations(first)
+      }
+    } catch (err: any) {
+      setSchemaError(
+        err?.response?.data?.error ?? err?.message ?? 'Failed to load database schema',
+      )
+    } finally {
+      setSchemaLoading(false)
+    }
+  }, [connectionId])
+
+  useEffect(() => {
+    loadSchema()
+  }, [loadSchema])
+
+  /* ── Query Table ── */
+  const queryTable = useCallback(
+    async (
+      tableName: string,
+      p = 0,
+      order: { column: string; direction: 'asc' | 'desc' } | null = null,
+    ) => {
+      setQueryLoading(true)
+      setQueryError(null)
+      try {
+        const res = await api.get(`/db-agent/${connectionId}/query`, {
+          params: {
+            table: tableName,
+            limit: PAGE_SIZE,
+            offset: p * PAGE_SIZE,
+            orderBy: order?.column,
+            orderDir: order?.direction,
+          },
+        })
+        const result = unwrapQueryResult(res)
+        setQueryResult(result)
+      } catch (err: any) {
+        setQueryError(
+          err?.response?.data?.error ?? err?.message ?? 'Failed to execute query',
+        )
+      } finally {
+        setQueryLoading(false)
+      }
+    },
+    [connectionId],
+  )
+
+  /* ── Load Relations ── */
+  const loadRelations = useCallback(async (tableName: string) => {
+    try {
+      const res = await api.get(`/db-agent/${connectionId}/relations`, {
+        params: { table: tableName },
+      })
+      setRelations(unwrapRelations(res))
+    } catch {
+      setRelations([])
+    }
+  }, [connectionId])
+
+  /* ── Handle Row Mutation Handlers ── */
   const handleOpenInsert = () => {
-    if (!currentTableSchema) return
-    const initial: Record<string, any> = {}
-    currentTableSchema.columns.forEach(col => {
-      if (!col.isPrimaryKey) initial[col.name] = ''
+    const initData: Record<string, any> = {}
+    currentTableSchema?.columns.forEach(c => {
+      initData[c.name] = ''
     })
-    setFormData(initial)
+    setFormData(initData)
     setMutationError(null)
     setInsertModalOpen(true)
   }
@@ -318,137 +413,25 @@ export default function VisualizePage() {
     }
   }
 
-  /* ─────────────────────────────────────────────────────────────────────────
-     LOAD SCHEMA
-     No /connect needed — Next.js API routes are stateless, every request
-     opens its own connection via withPostgres() in the route handler.
-  ───────────────────────────────────────────────────────────────────────── */
-  const loadSchema = useCallback(async () => {
-    setSchemaLoading(true)
-    setSchemaError(null)
-    setSchema([])
-    setSelectedTable(null)
-    setBreadcrumb([])
-
-    try {
-      const [schemaRes, connRes] = await Promise.all([
-        // ✅ GET /api/db-agent/:id/schema
-        api.get(`/db-agent/${connectionId}/schema`),
-        api.get(`/db-agent/${connectionId}`).catch(() => null),
-      ])
-
-      setSchema(unwrapSchema(schemaRes))
-
-      const name = unwrapConnectionName(connRes)
-      if (name) setConnectionName(name)
-    } catch (err: any) {
-      setSchemaError(
-        err?.response?.data?.error ?? err?.message ?? 'Failed to load schema',
-      )
-    } finally {
-      setSchemaLoading(false)
-    }
-  }, [connectionId])
-
-  useEffect(() => {
-    setSelectedTable(null)
-    setQueryResult(null)
-    setRelations([])
-    setBreadcrumb([])
-    setPage(0)
-    setOrderBy(null)
-    setRowFilter('')
-    loadSchema()
-  }, [connectionId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* ─────────────────────────────────────────────────────────────────────────
-     LOAD RELATIONS
-     ✅ GET /api/db-agent/:id/relations/:table  (was /relation/:table)
-  ───────────────────────────────────────────────────────────────────────── */
-  const loadRelations = useCallback(async (tableName: string) => {
-    try {
-      const res = await api.get(`/db-agent/${connectionId}/relations/${tableName}`)
-      setRelations(unwrapRelations(res))
-    } catch {
-      setRelations([])
-    }
-  }, [connectionId])
-
-  /* ─────────────────────────────────────────────────────────────────────────
-     QUERY TABLE ROWS
-     ✅ POST /api/db-agent/:id/query/:table  (was /:id/:table/query)
-  ───────────────────────────────────────────────────────────────────────── */
-  const queryTable = useCallback(async (
-    tableName: string,
-    pg = 0,
-    ob: { column: string; direction: 'asc' | 'desc' } | null = null,
-  ) => {
-    setQueryLoading(true)
-    setQueryError(null)
-    try {
-      const res = await api.post(`/db-agent/${connectionId}/query/${tableName}`, {
-        limit:  PAGE_SIZE,
-        offset: pg * PAGE_SIZE,
-        ...(ob ? { orderBy: ob } : {}),
-      })
-      const result = unwrapQueryResult(res)
-      if (!result) throw new Error('Unexpected response shape from query endpoint')
-      setQueryResult(result)
-    } catch (err: any) {
-      setQueryError(
-        err?.response?.data?.error ?? err?.message ?? 'Failed to load rows',
-      )
-      setQueryResult(null)
-    } finally {
-      setQueryLoading(false)
-    }
-  }, [connectionId])
-
-  /* ─────────────────────────────────────────────────────────────────────────
-     TRAVERSE RELATION
-     ✅ POST /api/db-agent/:id/traverse  (was /query/relation/traverse)
-
-     belongsTo: read FK value from current row
-       e.g. transaction.user_id = 5 → WHERE id = 5 on users
-
-     hasMany: read identifier from current row (always prefer `id` over `pk`)
-       e.g. user.id = 5 → WHERE user_id = 5 on transactions
-  ───────────────────────────────────────────────────────────────────────── */
+  /* ── Traverse Relation ── */
   const traverseRelation = useCallback(async (
-    rel:                Relation,
-    row:                Record<string, any>,
-    currentTable:       string,
-    currentTableCols:   Column[] | undefined,
+    rel: Relation,
+    row: Record<string, any>,
+    currentTable: string,
+    currentCols?: Column[],
   ) => {
+    const sourceColumn = rel.fromColumn
+    const sourceValue  = row[sourceColumn]
+
+    if (sourceValue === undefined || sourceValue === null) {
+      showToast(`Cannot traverse relation: ${sourceColumn} is NULL`)
+      return
+    }
+
     setQueryLoading(true)
     setQueryError(null)
 
     try {
-      let sourceColumn: string
-      let sourceValue:  string | number
-
-      if (rel.type === 'belongsTo') {
-        // Read the FK value stored in this row's column
-        sourceColumn = rel.fromColumn
-        sourceValue  = row[rel.fromColumn]
-        if (sourceValue == null) {
-          setQueryError(`FK column "${rel.fromColumn}" is null — cannot traverse`)
-          setQueryLoading(false)
-          return
-        }
-      } else {
-        // hasMany — use this row's identifier (prefer `id`, never `pk`)
-        const rowId = resolveRowId(row, currentTableCols)
-        if (!rowId) {
-          setQueryError('Cannot determine row identifier for hasMany traversal')
-          setQueryLoading(false)
-          return
-        }
-        sourceColumn = rowId.column
-        sourceValue  = rowId.value
-      }
-
-      // ✅ POST /api/db-agent/:id/traverse
       const res = await api.post(`/db-agent/${connectionId}/traverse`, {
         sourceTable:  currentTable,
         sourceColumn,
@@ -456,8 +439,6 @@ export default function VisualizePage() {
         relationType: rel.type,
         targetTable:  rel.toTable,
         targetColumn: rel.toColumn,
-        limit:        PAGE_SIZE,
-        offset:       0,
       })
 
       const result = unwrapQueryResult(res)
@@ -493,22 +474,18 @@ export default function VisualizePage() {
     }
   }, [connectionId, loadRelations])
 
-  /* ─────────────────────────────────────────────────────────────────────────
-     SELECT TABLE FROM SIDEBAR
-  ───────────────────────────────────────────────────────────────────────── */
+  /* ── Select Table from Sidebar ── */
   const handleSelectTable = useCallback(async (table: string) => {
     setSelectedTable(table)
     setBreadcrumb([{ table, label: table }])
     setPage(0)
     setOrderBy(null)
     setRowFilter('')
+    setMobileSidebarOpen(false)
     await Promise.all([queryTable(table, 0, null), loadRelations(table)])
   }, [queryTable, loadRelations])
 
-  /* ─────────────────────────────────────────────────────────────────────────
-     BREADCRUMB NAVIGATION
-     Re-traverses using the stored context — ✅ POST /api/db-agent/:id/traverse
-  ───────────────────────────────────────────────────────────────────────── */
+  /* ── Breadcrumb Navigation ── */
   const handleBreadcrumbClick = useCallback(async (index: number) => {
     const crumb   = breadcrumb[index]
     const trimmed = breadcrumb.slice(0, index + 1)
@@ -522,7 +499,6 @@ export default function VisualizePage() {
       setQueryLoading(true)
       setQueryError(null)
       try {
-        // ✅ POST /api/db-agent/:id/traverse
         const res = await api.post(`/db-agent/${connectionId}/traverse`, {
           sourceTable:  ctx.sourceTable,
           sourceColumn: ctx.sourceColumn,
@@ -530,11 +506,9 @@ export default function VisualizePage() {
           relationType: ctx.relationType,
           targetTable:  ctx.targetTable,
           targetColumn: ctx.targetColumn,
-          limit:        PAGE_SIZE,
-          offset:       0,
         })
         const result = unwrapQueryResult(res)
-        if (!result) throw new Error('Unexpected response shape')
+        if (!result) throw new Error('Failed to unwrap traversal result')
         setQueryResult(result)
       } catch (err: any) {
         setQueryError(
@@ -602,20 +576,48 @@ export default function VisualizePage() {
      RENDER
   ───────────────────────────────────────────────────────────────────────── */
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-screen bg-background overflow-hidden relative font-sans">
 
-      {/* ── Sidebar ── */}
-      <aside className={`shrink-0 border-r border-border transition-all duration-200 ease-in-out overflow-hidden ${sidebarOpen ? 'w-64' : 'w-0 border-r-0'}`}>
-        <div className="w-64 h-full flex flex-col bg-card">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-slate-900 border border-sky-500/40 text-sky-300 text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in slide-in-from-bottom-5">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Mobile Overlay Backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm md:hidden animate-in fade-in"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed md:relative inset-y-0 left-0 z-50 md:z-auto bg-card border-r border-border/80 transition-all duration-300 ease-in-out overflow-hidden flex flex-col ${
+        mobileSidebarOpen ? 'translate-x-0 w-72 shadow-2xl' : '-translate-x-full md:translate-x-0'
+      } ${sidebarOpen ? 'md:w-64' : 'md:w-0 md:border-r-0'}`}>
+        <div className="w-72 md:w-64 h-full flex flex-col">
           {/* Header */}
-          <div className="h-14 px-4 flex items-center gap-3 border-b border-border shrink-0">
-            <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-sm shrink-0">
-              <LucideLink className="w-4 h-4 text-primary-foreground" />
+          <div className="h-14 px-4 flex items-center justify-between border-b border-border/80 shrink-0 bg-card/80 backdrop-blur-md">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 bg-gradient-to-tr from-sky-500 to-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-sky-500/20 shrink-0">
+                <Database className="w-4 h-4 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-foreground truncate flex items-center gap-1.5">
+                  Visio <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">DB</span>
+                </p>
+                <p className="text-[10px] text-muted-foreground truncate font-mono">{connectionName}</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-foreground truncate">DBViz</p>
-              <p className="text-[10px] text-muted-foreground truncate">{connectionName}</p>
-            </div>
+            <button
+              onClick={() => setMobileSidebarOpen(false)}
+              className="md:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card/80"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Search */}
@@ -626,10 +628,10 @@ export default function VisualizePage() {
                 placeholder="Search tables..."
                 value={tableSearch}
                 onChange={e => setTableSearch(e.target.value)}
-                className="w-full h-8 pl-8 pr-7 text-xs bg-background border border-border rounded-lg focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
+                className="w-full h-8 pl-8 pr-7 text-xs bg-background/80 border border-border/80 rounded-xl focus:outline-none focus:border-sky-500/50 focus:ring-1 focus:ring-sky-500/30 text-foreground placeholder:text-muted-foreground transition-all"
               />
               {tableSearch && (
-                <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
+                <button onClick={() => setTableSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-sky-400 transition-colors">
                   <X className="w-3 h-3" />
                 </button>
               )}
@@ -637,10 +639,10 @@ export default function VisualizePage() {
           </div>
 
           {/* Count */}
-          <div className="px-5 pb-1 shrink-0">
+          <div className="px-5 pb-1 shrink-0 flex items-center justify-between">
             {schemaLoading
-              ? <div className="h-3 w-16 bg-border rounded animate-pulse" />
-              : <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              ? <div className="h-3 w-16 bg-border/60 rounded animate-pulse" />
+              : <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                   {filteredSchema.length} table{filteredSchema.length !== 1 ? 's' : ''}
                 </p>
             }
@@ -648,22 +650,22 @@ export default function VisualizePage() {
 
           {/* Error */}
           {schemaError && !schemaLoading && (
-            <div className="mx-3 mb-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-start gap-2">
+            <div className="mx-3 mb-2 p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 flex items-start gap-2">
               <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
                 <p>{schemaError}</p>
-                <button onClick={loadSchema} className="underline mt-1 hover:text-red-300 transition-colors">Retry</button>
+                <button onClick={loadSchema} className="underline mt-1 hover:text-rose-300 transition-colors">Retry</button>
               </div>
             </div>
           )}
 
           {/* Skeleton */}
           {schemaLoading && (
-            <div className="px-3 space-y-1 flex-1">
-              {[1, 2, 3, 4, 5].map(i => (
-                <div key={i} className="flex items-center gap-2 px-2 py-2 animate-pulse">
-                  <div className="w-3 h-3 bg-border rounded" />
-                  <div className="h-3 bg-border rounded" style={{ width: `${50 + i * 8}%` }} />
+            <div className="px-3 space-y-1.5 flex-1 pt-2">
+              {[1, 2, 3, 4, 5, 6].map(i => (
+                <div key={i} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-border/20 animate-pulse">
+                  <div className="w-3.5 h-3.5 bg-border/50 rounded" />
+                  <div className="h-3 bg-border/50 rounded flex-1" style={{ width: `${60 + (i % 3) * 10}%` }} />
                 </div>
               ))}
             </div>
@@ -671,32 +673,32 @@ export default function VisualizePage() {
 
           {/* Table list */}
           {!schemaLoading && (
-            <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+            <div className="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5 custom-scrollbar">
               {filteredSchema.map(table => {
                 const isSelected = selectedTable === table.name
                 const isExpanded = expandedTables.has(table.name)
                 return (
                   <div key={table.name}>
-                    <div className={`flex items-center rounded-lg transition-colors ${isSelected ? 'bg-blue-500/10' : 'hover:bg-blue-500/5'}`}>
-                      <button onClick={() => toggleExpand(table.name)} className="p-2 text-muted-foreground hover:text-blue-400 transition-colors shrink-0">
-                        {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    <div className={`flex items-center rounded-xl transition-all duration-150 ${isSelected ? 'bg-sky-500/10 border border-sky-500/20' : 'hover:bg-sky-500/5'}`}>
+                      <button onClick={() => toggleExpand(table.name)} className="p-2 text-muted-foreground hover:text-sky-400 transition-colors shrink-0">
+                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                       </button>
                       <button
                         onClick={() => handleSelectTable(table.name)}
-                        className={`flex-1 flex items-center gap-2 pr-3 py-1.5 text-sm text-left transition-colors min-w-0 ${isSelected ? 'text-blue-400 font-medium' : 'text-foreground hover:text-blue-400'}`}
+                        className={`flex-1 flex items-center gap-2 pr-3 py-2 text-xs font-medium text-left transition-colors min-w-0 ${isSelected ? 'text-sky-400 font-bold' : 'text-foreground hover:text-sky-400'}`}
                       >
-                        <Table2 className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <Table2 className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-sky-400' : 'text-muted-foreground'}`} />
                         <span className="truncate">{table.name}</span>
-                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0 tabular-nums">{table.columns.length}</span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-card border border-border/50 text-muted-foreground ml-auto shrink-0 tabular-nums">{table.columns.length}</span>
                       </button>
                     </div>
                     {isExpanded && (
-                      <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border space-y-0.5">
+                      <div className="ml-7 mr-2 mb-1 pl-3 py-1 border-l border-border/60 space-y-1">
                         {table.columns.map(col => (
                           <div key={col.name} className="flex items-center gap-1.5 py-0.5">
-                            {col.isPrimaryKey ? <Key className="w-3 h-3 text-yellow-400 shrink-0" /> : typeIcon(col.dataType)}
-                            <span className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors">{col.name}</span>
-                            <span className="text-[10px] text-muted-foreground/50 ml-auto shrink-0 hidden sm:block">
+                            {col.isPrimaryKey ? <Key className="w-3 h-3 text-amber-400 shrink-0" /> : typeIcon(col.dataType)}
+                            <span className="text-[11px] text-muted-foreground truncate hover:text-foreground transition-colors">{col.name}</span>
+                            <span className="text-[9px] font-mono text-muted-foreground/60 ml-auto shrink-0 hidden sm:block">
                               {col.dataType.split('(')[0].replace(' without time zone', '')}
                             </span>
                           </div>
@@ -710,10 +712,10 @@ export default function VisualizePage() {
           )}
 
           {/* Back */}
-          <div className="border-t border-border p-3 shrink-0">
+          <div className="border-t border-border/80 p-3 shrink-0 bg-card/40">
             <button
               onClick={() => router.push('/connections')}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 transition-all"
             >
               <ArrowLeft className="w-3.5 h-3.5 shrink-0" /> Back to Connections
             </button>
@@ -721,19 +723,31 @@ export default function VisualizePage() {
         </div>
       </aside>
 
-      {/* ── Main ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      {/* ── Main Dashboard Content ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background">
 
-        {/* Top bar */}
-        <header className="h-14 shrink-0 border-b border-border bg-card flex items-center px-4 gap-3">
-          <button onClick={() => setSidebarOpen(p => !p)} className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0">
-            {sidebarOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeftOpen className="w-5 h-5" />}
+        {/* Top Header Bar */}
+        <header className="h-14 shrink-0 border-b border-border/80 bg-card/70 backdrop-blur-md flex items-center px-4 gap-3">
+          <button
+            onClick={() => setSidebarOpen(p => !p)}
+            className="hidden md:flex p-2 rounded-xl text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/20 transition-all shrink-0"
+            title={sidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+          >
+            {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+          </button>
+
+          <button
+            onClick={() => setMobileSidebarOpen(p => !p)}
+            className="md:hidden p-2 rounded-xl text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/20 transition-all shrink-0"
+            title="Open Sidebar"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
           </button>
 
           <nav className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
             <button
               onClick={() => { setSelectedTable(null); setBreadcrumb([]) }}
-              className={`text-xs shrink-0 transition-colors ${breadcrumb.length === 0 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
+              className={`text-xs font-semibold shrink-0 transition-colors ${breadcrumb.length === 0 ? 'text-sky-400 font-bold' : 'text-muted-foreground hover:text-sky-400'}`}
             >
               {connectionName}
             </button>
@@ -742,7 +756,7 @@ export default function VisualizePage() {
                 <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
                 <button
                   onClick={() => handleBreadcrumbClick(i)}
-                  className={`text-xs truncate transition-colors ${i === breadcrumb.length - 1 ? 'text-foreground font-semibold' : 'text-muted-foreground hover:text-blue-400'}`}
+                  className={`text-xs truncate transition-colors ${i === breadcrumb.length - 1 ? 'text-sky-400 font-bold' : 'text-muted-foreground hover:text-sky-400'}`}
                 >
                   {crumb.label}
                 </button>
@@ -752,50 +766,105 @@ export default function VisualizePage() {
 
           <div className="flex items-center gap-2 shrink-0">
             {queryResult && !queryLoading && (
-              <span className="text-xs text-muted-foreground hidden sm:block tabular-nums">
-                {queryResult.total} total
+              <span className="text-xs font-mono text-muted-foreground hidden sm:block tabular-nums bg-card px-2.5 py-1 rounded-lg border border-border/50">
+                {queryResult.total} row{queryResult.total !== 1 ? 's' : ''}
               </span>
             )}
             {selectedTable && (
-              <button onClick={() => queryTable(selectedTable, page, orderBy)} className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors" title="Refresh">
-                <RefreshCw className={`w-4 h-4 ${queryLoading ? 'animate-spin' : ''}`} />
+              <button
+                onClick={() => queryTable(selectedTable, page, orderBy)}
+                className="p-2 rounded-xl text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/20 transition-all"
+                title="Refresh Table Data"
+              >
+                <RefreshCw className={`w-4 h-4 ${queryLoading ? 'animate-spin text-sky-400' : ''}`} />
               </button>
             )}
           </div>
         </header>
 
-        {/* Schema toolbar */}
+        {/* Schema Toolbar & Display Controls */}
         {selectedTable && currentTableSchema && (
-          <div className="shrink-0 border-b border-border bg-card/50 px-4 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
-            <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
-              <span className="text-xs text-muted-foreground flex items-center gap-1 shrink-0">
-                <Info className="w-3 h-3" /> Schema:
+          <div className="shrink-0 border-b border-border/80 bg-card/40 backdrop-blur-sm px-4 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+              <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1 shrink-0">
+                <Info className="w-3.5 h-3.5 text-sky-400" /> Columns ({currentTableSchema.columns.length}):
               </span>
               {currentTableSchema.columns.slice(0, 5).map(col => (
                 <ColBadge key={col.name} col={col} />
               ))}
               {currentTableSchema.columns.length > 5 && (
-                <span className="text-xs text-muted-foreground">+{currentTableSchema.columns.length - 5} more</span>
+                <span className="text-xs text-muted-foreground font-mono">+{currentTableSchema.columns.length - 5} more</span>
               )}
             </div>
+
+            {/* Toolbar Right Controls */}
             <div className="flex items-center gap-2 shrink-0">
+
+              {/* Display Mode Pills */}
+              <div className="flex items-center gap-1 p-1 bg-background/80 rounded-xl border border-border/80">
+                <button
+                  type="button"
+                  onClick={() => setCellWrapMode('scroll')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cellWrapMode === 'scroll'
+                      ? 'bg-sky-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="Horizontal Scroll Mode (Full untruncated cell content)"
+                >
+                  <MoveHorizontal className="w-3 h-3" />
+                  <span className="hidden md:inline">Full Scroll</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCellWrapMode('wrap')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cellWrapMode === 'wrap'
+                      ? 'bg-sky-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="Wrap Multi-line Text Mode"
+                >
+                  <WrapText className="w-3 h-3" />
+                  <span className="hidden md:inline">Wrap</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCellWrapMode('truncate')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    cellWrapMode === 'truncate'
+                      ? 'bg-sky-500 text-white shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="Compact Grid Mode"
+                >
+                  <Rows3 className="w-3 h-3" />
+                  <span className="hidden md:inline">Compact</span>
+                </button>
+              </div>
+
+              {/* Filter */}
               <div className="relative">
                 <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
                 <input
                   placeholder="Filter rows..."
                   value={rowFilter}
                   onChange={e => setRowFilter(e.target.value)}
-                  className="h-7 pl-7 pr-7 text-xs bg-background border border-border rounded-lg w-36 sm:w-44 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 text-foreground placeholder:text-muted-foreground"
+                  className="h-8 pl-7 pr-7 text-xs bg-background border border-border/80 rounded-xl w-32 sm:w-44 focus:outline-none focus:border-sky-500/50 focus:ring-1 focus:ring-sky-500/30 text-foreground placeholder:text-muted-foreground transition-all"
                 />
                 {rowFilter && (
-                  <button onClick={() => setRowFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-blue-400 transition-colors">
+                  <button onClick={() => setRowFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-sky-400 transition-colors">
                     <X className="w-3 h-3" />
                   </button>
                 )}
               </div>
+
+              {/* Add Row Button */}
               <button
                 onClick={handleOpenInsert}
-                className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg flex items-center gap-1.5 transition-colors shrink-0"
+                className="h-8 px-3.5 text-xs bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-semibold rounded-xl flex items-center gap-1.5 shadow-sm shadow-sky-500/20 transition-all shrink-0 active:scale-95"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Add Row
@@ -804,159 +873,221 @@ export default function VisualizePage() {
           </div>
         )}
 
-        {/* Content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Content Body */}
+        <div className="flex-1 flex flex-col overflow-hidden relative">
           {!selectedTable ? (
-            <div className="flex-1 flex items-center justify-center p-8">
-              <div className="text-center space-y-3 max-w-xs">
-                <div className="w-14 h-14 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto">
-                  <Database className="w-7 h-7 text-blue-400" />
+            <div className="flex-1 flex items-center justify-center p-8 bg-visio-grid">
+              <div className="text-center space-y-4 max-w-sm p-8 rounded-2xl bg-card/60 border border-border/80 backdrop-blur-xl shadow-2xl">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-sky-500/10 to-blue-500/10 border border-sky-500/20 flex items-center justify-center mx-auto shadow-inner">
+                  <Database className="w-8 h-8 text-sky-400" />
                 </div>
-                <h2 className="text-base font-semibold text-foreground">Select a table</h2>
-                <p className="text-sm text-muted-foreground">Choose a table from the sidebar to explore your data and traverse relationships.</p>
+                <div className="space-y-1.5">
+                  <h2 className="text-base font-bold text-foreground">Select a Table</h2>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Pick a database table from the sidebar to inspect records, traverse relationships, and run mutations.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setMobileSidebarOpen(true)}
+                  className="md:hidden px-4 py-2 rounded-xl bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-semibold hover:bg-sky-500/20 transition-all"
+                >
+                  Browse Tables
+                </button>
               </div>
             </div>
           ) : (
             <>
               {queryLoading ? (
-                <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-400" />
-                  <span className="text-sm">Loading rows...</span>
+                <div className="flex-1 overflow-auto p-4 space-y-3 custom-scrollbar">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground pb-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-sky-400" />
+                    <span>Executing query...</span>
+                  </div>
+                  <div className="border border-border/80 rounded-2xl overflow-hidden bg-card/40">
+                    <div className="h-10 bg-card border-b border-border/80 px-4 flex items-center gap-4 animate-pulse">
+                      {[1, 2, 3, 4, 5].map(i => <div key={i} className="h-4 bg-border/60 rounded w-24" />)}
+                    </div>
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map(ri => (
+                      <div key={ri} className="h-12 border-b border-border/40 px-4 flex items-center gap-4 animate-pulse">
+                        {[1, 2, 3, 4, 5].map(ci => <div key={ci} className="h-3 bg-border/40 rounded w-20" />)}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : queryError ? (
                 <div className="flex-1 flex items-center justify-center p-6">
-                  <div className="text-center space-y-2">
-                    <AlertCircle className="w-8 h-8 text-red-400 mx-auto" />
-                    <p className="text-sm text-red-400">{queryError}</p>
-                    <button onClick={() => queryTable(selectedTable, page, orderBy)} className="text-xs text-blue-400 hover:underline flex items-center gap-1 mx-auto">
-                      <RefreshCw className="w-3 h-3" /> Retry
+                  <div className="text-center space-y-3 max-w-md p-6 rounded-2xl bg-rose-500/5 border border-rose-500/20">
+                    <AlertCircle className="w-10 h-10 text-rose-400 mx-auto" />
+                    <p className="text-xs font-mono text-rose-400 leading-relaxed">{queryError}</p>
+                    <button onClick={() => queryTable(selectedTable, page, orderBy)} className="px-4 py-2 text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/20 transition-all inline-flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5" /> Retry Query
                     </button>
                   </div>
                 </div>
               ) : !queryResult || filteredRows.length === 0 ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center space-y-2">
-                    <Rows3 className="w-8 h-8 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">No rows found</p>
+                <div className="flex-1 flex items-center justify-center p-6">
+                  <div className="text-center space-y-2 max-w-xs">
+                    <Rows3 className="w-10 h-10 text-muted-foreground/50 mx-auto" />
+                    <p className="text-sm font-semibold text-foreground">No rows found</p>
+                    <p className="text-xs text-muted-foreground">This table contains no matching records for the current filter.</p>
                   </div>
                 </div>
               ) : (
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-sm border-collapse min-w-max">
-                    <thead className="sticky top-0 z-10 bg-card border-b border-border">
-                      <tr>
-                        {queryResult.columns.map(col => {
-                          const colSchema = currentTableSchema?.columns.find(c => c.name === col)
-                          const isOrdered = orderBy?.column === col
-                          const fkRel     = findFkRelation(col, relations)
-                          return (
-                            <th key={col} className="px-4 py-2.5 text-left font-semibold text-xs text-muted-foreground whitespace-nowrap group">
-                              <button onClick={() => handleSort(col)} className="flex items-center gap-1.5 hover:text-blue-400 transition-colors">
-                                {colSchema?.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400 shrink-0" />}
-                                {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3 h-3 text-blue-400 shrink-0" />}
-                                <span>{col}</span>
-                                {isOrdered
-                                  ? orderBy?.direction === 'asc'
-                                    ? <SortAsc  className="w-3 h-3 text-blue-400" />
-                                    : <SortDesc className="w-3 h-3 text-blue-400" />
-                                  : <SortAsc className="w-3 h-3 opacity-0 group-hover:opacity-30 transition-opacity" />
-                                }
-                              </button>
+                /* ── SENIOR PRODUCTION DATA TABLE CONTAINER (FULL HORIZONTAL SCROLL) ── */
+                <div className="flex-1 overflow-auto custom-scrollbar p-2 sm:p-4 min-w-0">
+                  <div className="border border-border/80 rounded-2xl overflow-x-auto custom-scrollbar shadow-2xl bg-card/70 backdrop-blur-md max-w-full block">
+                    <table className="w-full text-xs border-collapse min-w-max">
+                      <thead className="sticky top-0 z-10 bg-card border-b border-border/80 shadow-sm">
+                        <tr>
+                          {queryResult.columns.map(col => {
+                            const colSchema = currentTableSchema?.columns.find(c => c.name === col)
+                            const isOrdered = orderBy?.column === col
+                            const fkRel     = findFkRelation(col, relations)
+                            return (
+                              <th
+                                key={col}
+                                className={`px-4 py-3 text-left font-bold text-xs whitespace-nowrap min-w-[140px] group ${
+                                  colSchema?.isPrimaryKey ? 'bg-amber-500/5 text-amber-300' : 'text-muted-foreground'
+                                }`}
+                              >
+                                <button onClick={() => handleSort(col)} className="flex items-center gap-1.5 hover:text-sky-400 transition-colors">
+                                  {colSchema?.isPrimaryKey && <Key className="w-3.5 h-3.5 text-amber-400 shrink-0" title="Primary Key" />}
+                                  {fkRel && !colSchema?.isPrimaryKey && <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" title="Foreign Key" />}
+                                  <span className="font-semibold text-foreground">{col}</span>
+                                  {isOrdered
+                                    ? orderBy?.direction === 'asc'
+                                      ? <SortAsc  className="w-3.5 h-3.5 text-sky-400" />
+                                      : <SortDesc className="w-3.5 h-3.5 text-sky-400" />
+                                    : <SortAsc className="w-3.5 h-3.5 opacity-0 group-hover:opacity-40 transition-opacity" />
+                                  }
+                                </button>
+                              </th>
+                            )
+                          })}
+                          {relations.length > 0 && (
+                            <th className="px-4 py-3 text-left text-xs font-bold text-muted-foreground whitespace-nowrap min-w-[140px]">
+                              Relations
                             </th>
-                          )
-                        })}
-                        {relations.length > 0 && (
-                          <th className="px-4 py-2.5 text-left text-xs text-muted-foreground font-semibold whitespace-nowrap">
-                            Relations
+                          )}
+                          <th className="px-4 py-3 text-center text-xs font-bold text-muted-foreground whitespace-nowrap min-w-[100px]">
+                            Actions
                           </th>
-                        )}
-                        <th className="px-4 py-2.5 text-center text-xs text-muted-foreground font-semibold whitespace-nowrap">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRows.map((row, ri) => {
-                        const rowId = resolveRowId(row, currentTableSchema?.columns)
-                        return (
-                          <tr key={ri} className="border-b border-border/50 hover:bg-blue-500/5 transition-colors">
-                            {queryResult.columns.map(col => {
-                              const val   = row[col]
-                              const fkRel = findFkRelation(col, relations)
-                              return (
-                                <td key={col} className="px-4 py-2.5 text-xs whitespace-nowrap max-w-[200px]">
-                                  {val === null || val === undefined ? (
-                                    <span className="text-muted-foreground/40 italic">null</span>
-                                  ) : fkRel ? (
-                                    <button
-                                      onClick={() => traverseRelation(fkRel, row, selectedTable, currentTableSchema?.columns)}
-                                      className="text-blue-400 hover:underline flex items-center gap-1 transition-colors"
-                                    >
-                                      {formatCellValue(val)}
-                                      <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-                                    </button>
-                                  ) : (
-                                    <span className={`text-foreground truncate block ${typeof val === 'boolean' ? (val ? 'text-emerald-400' : 'text-muted-foreground') : ''}`}>
-                                      {formatCellValue(val)}
-                                    </span>
-                                  )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/40">
+                        {filteredRows.map((row, ri) => {
+                          const rowId = resolveRowId(row, currentTableSchema?.columns)
+                          return (
+                            <tr key={ri} className="hover:bg-sky-500/5 transition-colors group">
+                              {queryResult.columns.map(col => {
+                                const val   = row[col]
+                                const fkRel = findFkRelation(col, relations)
+
+                                /* Cell Styling based on Wrap Mode */
+                                const cellLayoutClass = cellWrapMode === 'scroll'
+                                  ? 'whitespace-nowrap min-w-[150px]'
+                                  : cellWrapMode === 'wrap'
+                                  ? 'break-words whitespace-pre-wrap max-w-[320px] min-w-[150px]'
+                                  : 'whitespace-nowrap max-w-[220px] truncate'
+
+                                return (
+                                  <td
+                                    key={col}
+                                    onClick={() => copyCellContent(val)}
+                                    onDoubleClick={() => handleInspectCell(col, val)}
+                                    title="Click to copy · Double-click to inspect"
+                                    className={`px-4 py-3 cursor-pointer hover:bg-sky-500/10 transition-colors relative ${cellLayoutClass}`}
+                                  >
+                                    {val === null || val === undefined ? (
+                                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-card/80 text-muted-foreground/50 border border-border/50">NULL</span>
+                                    ) : fkRel ? (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); traverseRelation(fkRel, row, selectedTable, currentTableSchema?.columns) }}
+                                        className="text-sky-400 font-semibold hover:underline inline-flex items-center gap-1.5 transition-colors"
+                                      >
+                                        <span className="font-mono">{formatCellValue(val)}</span>
+                                        <ExternalLink className="w-3 h-3 opacity-70 shrink-0" />
+                                      </button>
+                                    ) : typeof val === 'boolean' ? (
+                                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${val ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'}`}>
+                                        <span className={`w-1.5 h-1.5 rounded-full ${val ? 'bg-emerald-400' : 'bg-slate-400'}`} />
+                                        {val ? 'TRUE' : 'FALSE'}
+                                      </span>
+                                    ) : (
+                                      <span className={`text-foreground font-mono text-xs ${cellWrapMode === 'truncate' ? 'truncate block' : ''}`}>
+                                        {formatCellValue(val)}
+                                      </span>
+                                    )}
+                                  </td>
+                                )
+                              })}
+
+                              {/* Relations Column */}
+                              {relations.length > 0 && (
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {dedupeRelations(relations).map((rel, relIdx) => (
+                                      <button
+                                        key={`${rel.type}:${rel.toTable}:${rel.fromColumn}:${relIdx}`}
+                                        disabled={rel.type === 'hasMany' && rowId === null}
+                                        onClick={() => traverseRelation(rel, row, selectedTable, currentTableSchema?.columns)}
+                                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 transition-all whitespace-nowrap disabled:opacity-30 disabled:cursor-not-allowed active:scale-95"
+                                      >
+                                        <Link2 className="w-3 h-3" />
+                                        {rel.type === 'hasMany' ? `↳ ${rel.toTable}` : `→ ${rel.toTable}`}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </td>
-                              )
-                            })}
-                            {relations.length > 0 && (
-                              <td className="px-4 py-2.5">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  {dedupeRelations(relations).map((rel, relIdx) => (
-                                    <button
-                                      key={`${rel.type}:${rel.toTable}:${rel.fromColumn}:${relIdx}`}
-                                      disabled={rel.type === 'hasMany' && rowId === null}
-                                      onClick={() => traverseRelation(rel, row, selectedTable, currentTableSchema?.columns)}
-                                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-colors whitespace-nowrap disabled:opacity-30 disabled:cursor-not-allowed"
-                                    >
-                                      <Link2 className="w-2.5 h-2.5" />
-                                      {rel.type === 'hasMany' ? `↳ ${rel.toTable}` : `→ ${rel.toTable}`}
-                                    </button>
-                                  ))}
+                              )}
+
+                              {/* Actions Column */}
+                              <td className="px-4 py-3 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => handleOpenEdit(row)}
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
+                                    title="Edit Row"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleOpenDelete(row)}
+                                    className="p-1.5 rounded-lg text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                    title="Delete Row"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
                                 </div>
                               </td>
-                            )}
-                            <td className="px-4 py-2.5 text-center whitespace-nowrap">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  onClick={() => handleOpenEdit(row)}
-                                  className="p-1.5 rounded-md text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
-                                  title="Edit Row"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleOpenDelete(row)}
-                                  className="p-1.5 rounded-md text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                                  title="Delete Row"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
               {/* Pagination */}
               {queryResult && queryResult.rows.length > 0 && (
-                <div className="shrink-0 border-t border-border px-4 py-2.5 flex items-center justify-between bg-card">
-                  <span className="text-xs text-muted-foreground">
-                    Page {page + 1} · {Math.ceil(queryResult.total / PAGE_SIZE)} pages · {queryResult.total} rows
+                <div className="shrink-0 border-t border-border/80 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-2 bg-card/80 backdrop-blur-md">
+                  <span className="text-xs font-mono text-muted-foreground">
+                    Page {page + 1} of {Math.ceil(queryResult.total / PAGE_SIZE)} · Showing {filteredRows.length} of {queryResult.total} total rows
                   </span>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => handlePage(-1)} disabled={page === 0 || queryLoading} className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                    <button
+                      onClick={() => handlePage(-1)}
+                      disabled={page === 0 || queryLoading}
+                      className="px-3 py-1.5 text-xs rounded-xl border border-border/80 text-muted-foreground hover:text-sky-400 hover:border-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold"
+                    >
                       Previous
                     </button>
-                    <button onClick={() => handlePage(1)} disabled={!hasNextPage || queryLoading} className="px-3 py-1 text-xs rounded-lg border border-border text-muted-foreground hover:text-blue-400 hover:border-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                    <button
+                      onClick={() => handlePage(1)}
+                      disabled={!hasNextPage || queryLoading}
+                      className="px-3 py-1.5 text-xs rounded-xl border border-border/80 text-muted-foreground hover:text-sky-400 hover:border-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold"
+                    >
                       Next
                     </button>
                   </div>
@@ -966,60 +1097,71 @@ export default function VisualizePage() {
           )}
         </div>
 
-        {/* Status bar */}
-        <div className="shrink-0 h-7 border-t border-border bg-card/80 px-4 flex items-center gap-4 text-[10px] text-muted-foreground">
-          <span className="flex items-center gap-1.5 shrink-0">
-            <Database className="w-3 h-3" />
-            <span className="font-medium text-foreground">{connectionName}</span>
-          </span>
-          {selectedTable && (
-            <>
-              <span className="text-border">·</span>
-              <span className="flex items-center gap-1">
-                <Table2 className="w-3 h-3" />{selectedTable}
-                {currentTableSchema && <span className="text-muted-foreground/60">({currentTableSchema.columns.length} cols)</span>}
-              </span>
-            </>
-          )}
-          {queryResult && !queryLoading && selectedTable && (
-            <><span className="text-border">·</span><span>{queryResult.total} total rows</span></>
-          )}
-          {relations.length > 0 && selectedTable && (
-            <>
-              <span className="text-border">·</span>
-              <span className="flex items-center gap-1">
-                <Link2 className="w-3 h-3" />
-                {dedupeRelations(relations).length} relation{dedupeRelations(relations).length !== 1 ? 's' : ''}
-              </span>
-            </>
-          )}
-          <span className="ml-auto">
-            {queryLoading && (
-              <span className="flex items-center gap-1 text-blue-400">
-                <Loader2 className="w-3 h-3 animate-spin" /> loading...
-              </span>
-            )}
-          </span>
-        </div>
       </div>
 
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-10 right-10 z-50 flex items-center gap-2 px-4 py-3 bg-emerald-500 text-white rounded-lg shadow-xl text-xs font-semibold animate-in fade-in slide-in-from-bottom-2">
-          <CheckCircle2 className="w-4 h-4" />
-          {toastMessage}
+      {/* ─────────────────────────────────────────────────────────────────────────
+         CELL VALUE INSPECTOR MODAL
+      ───────────────────────────────────────────────────────────────────────── */}
+      {inspectModalOpen && inspectCellData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-xl bg-card border border-border/80 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                  <Eye className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Cell Value Inspector</h3>
+                  <p className="text-[10px] font-mono text-sky-400">Column: {inspectCellData.col}</p>
+                </div>
+              </div>
+              <button onClick={() => setInspectModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-black/70 border border-border/80 overflow-auto max-h-96 font-mono text-xs text-emerald-400 leading-relaxed whitespace-pre-wrap select-all">
+              {typeof inspectCellData.val === 'object'
+                ? JSON.stringify(inspectCellData.val, null, 2)
+                : String(inspectCellData.val ?? 'NULL')
+              }
+            </div>
+
+            <div className="flex justify-between items-center pt-2">
+              <button
+                type="button"
+                onClick={() => copyCellContent(inspectCellData.val)}
+                className="px-3.5 py-1.5 rounded-xl bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 text-xs font-semibold flex items-center gap-1.5 transition-all"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy Content
+              </button>
+              <button
+                type="button"
+                onClick={() => setInspectModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold bg-secondary hover:bg-secondary/80 text-foreground"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Insert Row Modal */}
-      {insertModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setInsertModalOpen(false)} />
-          <div className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
+      {/* ─────────────────────────────────────────────────────────────────────────
+         INSERT / EDIT MODALS
+      ───────────────────────────────────────────────────────────────────────── */}
+      {insertModalOpen && currentTableSchema && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg bg-card border border-border/80 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3 shrink-0">
               <div className="flex items-center gap-2">
-                <Plus className="w-4 h-4 text-blue-400" />
-                <h3 className="text-base font-semibold text-foreground">Insert Row into {selectedTable}</h3>
+                <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                  <Plus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Insert Row into {selectedTable}</h3>
+                  <p className="text-[10px] text-muted-foreground">Fill column values to insert a record</p>
+                </div>
               </div>
               <button onClick={() => setInsertModalOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
@@ -1027,62 +1169,62 @@ export default function VisualizePage() {
             </div>
 
             {mutationError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
                 {mutationError}
               </div>
             )}
 
-            <div className="space-y-3">
-              {currentTableSchema?.columns.map(col => {
-                if (col.isPrimaryKey) return null
-                return (
-                  <div key={col.name} className="space-y-1">
-                    <label className="text-xs font-medium text-foreground flex items-center justify-between">
-                      <span>{col.name}</span>
-                      <span className="text-[10px] text-muted-foreground">({col.dataType})</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={formData[col.name] ?? ''}
-                      onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
-                      placeholder={`Enter ${col.name}...`}
-                      className="w-full h-8 px-3 text-xs bg-background border border-border rounded-lg focus:outline-none focus:border-blue-500/50 text-foreground"
-                    />
-                  </div>
-                )
-              })}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+              {currentTableSchema.columns.map(col => (
+                <div key={col.name} className="space-y-1">
+                  <label className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
+                    {col.isPrimaryKey ? <Key className="w-3 h-3 text-amber-400" /> : typeIcon(col.dataType)}
+                    <span>{col.name}</span>
+                    <span className="text-[10px] font-mono text-muted-foreground/60">({col.dataType})</span>
+                  </label>
+                  <Input
+                    placeholder={col.isNullable ? 'NULL (optional)' : 'Value'}
+                    value={formData[col.name] ?? ''}
+                    onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
+                    className="bg-background h-9 text-xs font-mono rounded-xl"
+                  />
+                </div>
+              ))}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+            <div className="flex justify-end gap-2 pt-2 border-t border-border/80 shrink-0">
               <button
+                type="button"
                 onClick={() => setInsertModalOpen(false)}
-                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
               >
                 Cancel
               </button>
-              <button
+              <Button
                 onClick={handleInsertSubmit}
                 disabled={mutationLoading}
-                className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+                className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white h-9 px-5 text-xs font-bold rounded-xl shadow-md"
               >
                 {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                Insert Row
-              </button>
+                Insert Record
+              </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Edit Row Modal */}
-      {editModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditModalOpen(false)} />
-          <div className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
+      {editModalOpen && currentTableSchema && selectedRowData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg bg-card border border-border/80 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3 shrink-0">
               <div className="flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-blue-400" />
-                <h3 className="text-base font-semibold text-foreground">Edit Row in {selectedTable}</h3>
+                <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-foreground">Edit Row in {selectedTable}</h3>
+                  <p className="text-[10px] text-muted-foreground">Modify column fields and save changes</p>
+                </div>
               </div>
               <button onClick={() => setEditModalOpen(false)} className="text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
@@ -1090,95 +1232,98 @@ export default function VisualizePage() {
             </div>
 
             {mutationError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
                 {mutationError}
               </div>
             )}
 
-            <div className="space-y-3">
-              {currentTableSchema?.columns.map(col => {
-                return (
-                  <div key={col.name} className="space-y-1">
-                    <label className="text-xs font-medium text-foreground flex items-center justify-between">
-                      <span className="flex items-center gap-1">
-                        {col.name} {col.isPrimaryKey && <Key className="w-3 h-3 text-yellow-400" />}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">({col.dataType})</span>
-                    </label>
-                    <input
-                      type="text"
-                      disabled={col.isPrimaryKey}
-                      value={formatCellValue(formData[col.name])}
-                      onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
-                      className={`w-full h-8 px-3 text-xs bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-blue-500/50 ${col.isPrimaryKey ? 'opacity-60 cursor-not-allowed bg-muted/30' : ''}`}
-                    />
-                  </div>
-                )
-              })}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+              {currentTableSchema.columns.map(col => (
+                <div key={col.name} className="space-y-1">
+                  <label className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
+                    {col.isPrimaryKey ? <Key className="w-3 h-3 text-amber-400" /> : typeIcon(col.dataType)}
+                    <span>{col.name}</span>
+                    <span className="text-[10px] font-mono text-muted-foreground/60">({col.dataType})</span>
+                  </label>
+                  <Input
+                    placeholder="Value"
+                    value={formData[col.name] ?? ''}
+                    disabled={col.isPrimaryKey}
+                    onChange={e => setFormData(prev => ({ ...prev, [col.name]: e.target.value }))}
+                    className="bg-background h-9 text-xs font-mono rounded-xl disabled:opacity-50"
+                  />
+                </div>
+              ))}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+            <div className="flex justify-end gap-2 pt-2 border-t border-border/80 shrink-0">
               <button
+                type="button"
                 onClick={() => setEditModalOpen(false)}
-                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
               >
                 Cancel
               </button>
-              <button
+              <Button
                 onClick={handleEditSubmit}
                 disabled={mutationLoading}
-                className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+                className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white h-9 px-5 text-xs font-bold rounded-xl shadow-md"
               >
-                {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                 Save Changes
-              </button>
+              </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Delete Row Confirmation Modal */}
-      {deleteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDeleteModalOpen(false)} />
-          <div className="relative z-10 w-full max-w-md bg-card border border-border rounded-xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                <Trash2 className="w-5 h-5 text-red-400" />
+      {deleteModalOpen && selectedRowData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-card border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-rose-500/20 pb-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-foreground">Delete Record Confirmation</h3>
               </div>
-              <div>
-                <h3 className="text-base font-semibold text-foreground">Delete Row</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Are you sure you want to delete this row from <span className="font-medium text-foreground">{selectedTable}</span>? This action cannot be undone.</p>
-              </div>
+              <button onClick={() => setDeleteModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {mutationError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/20 text-xs text-red-400 rounded-lg flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
                 {mutationError}
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Are you sure you want to permanently delete this row from table <span className="font-mono text-sky-400 font-bold">{selectedTable}</span>?
+            </p>
+
+            <div className="flex justify-end gap-2 pt-2">
               <button
+                type="button"
                 onClick={() => setDeleteModalOpen(false)}
-                className="px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
               >
                 Cancel
               </button>
               <button
-                onClick={handleDeleteSubmit}
+                type="button"
                 disabled={mutationLoading}
-                className="px-4 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium flex items-center gap-1.5 disabled:opacity-50"
+                onClick={handleDeleteSubmit}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-500/20 flex items-center gap-1.5 disabled:opacity-50 transition-all"
               >
                 {mutationLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                Delete Row
+                Delete Record
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   )
 }

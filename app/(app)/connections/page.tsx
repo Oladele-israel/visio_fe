@@ -356,24 +356,24 @@ function ConnectionCard({ connection, onEdit, onDelete, onConnect, isConnecting 
 }) {
   const badge = getBadge(connection.type)
   return (
-    <div className="bg-card border border-border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 hover:border-blue-500/30 transition-all duration-200">
-      <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0">
-        <Database className="w-5 h-5 text-blue-400" />
+    <div className="group relative bg-card/70 hover:bg-card border border-border/80 hover:border-sky-500/40 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 transition-all duration-300 shadow-lg shadow-black/5 hover:shadow-sky-500/10">
+      <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-sky-500/10 via-blue-500/10 to-indigo-500/10 border border-sky-500/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform duration-300">
+        <Database className="w-5 h-5 text-sky-400" />
       </div>
 
-      <div className="flex-1 min-w-0 space-y-1">
+      <div className="flex-1 min-w-0 space-y-1.5">
         <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-sm font-semibold text-foreground truncate">{connection.name}</h3>
-          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badge.color}`}>
+          <h3 className="text-sm font-bold text-foreground tracking-tight truncate">{connection.name}</h3>
+          <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${badge.color}`}>
             {badge.label}
           </span>
           {connection.ssl && (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 flex items-center gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 flex items-center gap-1">
               <Shield className="w-2.5 h-2.5" /> SSL
             </span>
           )}
         </div>
-        <p className="text-xs text-muted-foreground truncate">
+        <p className="text-xs text-muted-foreground font-mono truncate">
           {normaliseType(connection.type) !== 'sqlite'
             ? `${connection.username}@${connection.host}:${connection.port} / ${connection.database}`
             : connection.database
@@ -381,22 +381,22 @@ function ConnectionCard({ connection, onEdit, onDelete, onConnect, isConnecting 
         </p>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-border/50">
         <button onClick={onEdit}
-          className="p-2 rounded-lg text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/20 transition-all"
+          className="p-2 rounded-xl text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/20 transition-all duration-200 active:scale-95"
           title="Edit connection">
           <Pencil className="w-4 h-4" />
         </button>
         <button onClick={onDelete}
-          className="p-2 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all"
+          className="p-2 rounded-xl text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all duration-200 active:scale-95"
           title="Delete connection">
           <Trash2 className="w-4 h-4" />
         </button>
         <Button onClick={onConnect} disabled={isConnecting}
-          className="bg-blue-600 hover:bg-blue-500 text-white h-9 px-4 gap-2 text-sm">
+          className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-medium shadow-md shadow-sky-500/20 h-9 px-4 gap-2 text-xs rounded-xl transition-all duration-200 active:scale-95">
           {isConnecting
             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
-            : <><Plug    className="w-3.5 h-3.5" /> Connect</>
+            : <><Plug    className="w-3.5 h-3.5" /> Explore Database</>
           }
         </Button>
       </div>

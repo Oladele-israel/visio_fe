@@ -8,8 +8,9 @@ import { Button } from '@/components/ui/button'
 import {
   Database, Server, User, Lock, Hash,
   Globe, Shield, ChevronRight, Loader2,
-  CheckCircle2, AlertCircle, Cloud, Terminal, Copy, Check, Zap, Laptop,
-  Download, RefreshCw, Radio, Sparkles,
+  CheckCircle2, AlertCircle, Cloud, Copy, Check, Zap, Laptop,
+  Download, RefreshCw, Sparkles, Plus, Trash2, Pencil, X, AlertTriangle, ArrowLeft,
+  ShieldCheck, Terminal
 } from 'lucide-react'
 
 /* ─────────────────────────────────────────
@@ -58,13 +59,13 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-        <span className="text-blue-400">{icon}</span>
+      <label className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+        <span className="text-sky-400">{icon}</span>
         {label}
       </label>
       {children}
       {error && (
-        <p className="flex items-center gap-1.5 text-xs text-red-400">
+        <p className="flex items-center gap-1.5 text-xs text-rose-400 font-medium">
           <AlertCircle className="w-3 h-3 shrink-0" />
           {error}
         </p>
@@ -84,33 +85,46 @@ export default function CreateConnectionPage() {
 
   const [form, setForm] = useState<FormData>({
     name: '',
-    type: '',
-    host: '',
-    port: '',
+    type: 'postgres',
+    host: 'localhost',
+    port: '5432',
     database: '',
-    username: '',
+    username: 'postgres',
     password: '',
     ssl: false,
   })
 
   const [targetMode, setTargetMode] = useState<'direct' | 'tunnel'>('direct')
-  const [bridgeType, setBridgeType] = useState<'permanent' | 'quick'>('permanent')
-  const [activeOs, setActiveOs] = useState<'mac' | 'linux' | 'win'>('mac')
-  const [tunnelServiceMode, setTunnelServiceMode] = useState<'quick' | 'daemon'>('quick')
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
+
+  /* Connection URI Parser State */
+  const [connectionUri, setConnectionUri] = useState('')
+  const [uriParseStatus, setUriParseStatus] = useState<string | null>(null)
+  const [uriParseError, setUriParseError] = useState<string | null>(null)
   
-  /* Visio Agent State (Option A: 1-Click Auto-Bridge) */
+  /* Visio Agent State */
   const [agentStatus, setAgentStatus] = useState<'checking' | 'active' | 'offline'>('checking')
   const [isBridging, setIsBridging] = useState(false)
   const [agentMessage, setAgentMessage] = useState<string | null>(null)
   const [discoveredDbs, setDiscoveredDbs] = useState<string[]>([])
+
+  /* Database Management State */
+  const [createDbModalOpen, setCreateDbModalOpen] = useState(false)
+  const [newDbInputName, setNewDbInputName] = useState('')
+  const [renameDbModalOpen, setRenameDbModalOpen] = useState(false)
+  const [targetDbToRename, setTargetDbToRename] = useState<string | null>(null)
+  const [renameDbNewName, setRenameDbNewName] = useState('')
+  const [deleteDbModalOpen, setDeleteDbModalOpen] = useState(false)
+  const [targetDbToDelete, setTargetDbToDelete] = useState<string | null>(null)
+  const [dbManageLoading, setDbManageLoading] = useState(false)
+  const [dbManageMessage, setDbManageMessage] = useState<string | null>(null)
+  const [dbManageError, setDbManageError] = useState<string | null>(null)
 
   const [errors, setErrors] = useState<FormErrors>({})
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
-
   const [dbScanError, setDbScanError] = useState<string | null>(null)
 
   /* Auto-discover local databases */
@@ -140,6 +154,115 @@ export default function CreateConnectionPage() {
       }
     } catch {
       // Ignore
+    }
+  }
+
+  /* Parse Database Connection URI */
+  const handleParseUri = (rawUri: string) => {
+    setConnectionUri(rawUri)
+    setUriParseError(null)
+    setUriParseStatus(null)
+
+    const trimmed = rawUri.trim()
+    if (!trimmed) return
+
+    try {
+      let uriString = trimmed
+      if (uriString.startsWith('postgres://')) {
+        uriString = uriString.replace('postgres://', 'postgresql://')
+      }
+
+      const parsed = new URL(uriString)
+      let type: FormData['type'] = 'postgres'
+      let defaultPort = '5432'
+
+      const scheme = parsed.protocol.replace(':', '').toLowerCase()
+      if (scheme === 'postgresql' || scheme === 'postgres') {
+        type = 'postgres'
+        defaultPort = '5432'
+      } else if (scheme === 'mysql') {
+        type = 'mysql'
+        defaultPort = '3306'
+      } else if (scheme === 'sqlserver' || scheme === 'mssql') {
+        type = 'mssql'
+        defaultPort = '1433'
+      }
+
+      const username = parsed.username ? decodeURIComponent(parsed.username) : ''
+      const password = parsed.password ? decodeURIComponent(parsed.password) : ''
+      const host = parsed.hostname || 'localhost'
+      const port = parsed.port || defaultPort
+      const database = parsed.pathname ? decodeURIComponent(parsed.pathname.replace(/^\//, '')) : ''
+
+      const searchParams = parsed.searchParams
+      const sslParam = searchParams.get('ssl') || searchParams.get('sslmode') || searchParams.get('sslMode')
+      const isSsl = sslParam === 'true' || sslParam === 'require' || sslParam === 'verify-full' || sslParam === 'no-verify' || sslParam === 'prefer'
+
+      setForm(prev => ({
+        ...prev,
+        type,
+        host,
+        port,
+        database: database || prev.database,
+        username: username || prev.username,
+        password: password || prev.password,
+        ssl: isSsl,
+        name: prev.name || (database ? `${database} (${type})` : `${host} (${type})`),
+      }))
+
+      setUriParseStatus(`Successfully extracted ${type.toUpperCase()} connection details for database "${database || 'default'}"`)
+    } catch {
+      setUriParseError('Invalid connection URI format. Example: postgresql://username:password@localhost:5432/dbname?sslmode=require')
+    }
+  }
+
+  /* Execute DB Management Action */
+  const handleManageDatabase = async (action: 'create' | 'drop' | 'rename', dbName: string, newName?: string) => {
+    setDbManageError(null)
+    setDbManageMessage(null)
+    setDbManageLoading(true)
+    try {
+      const res = await fetch('http://127.0.0.1:4567/db/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          dbName,
+          newName,
+          port: form.port || '5432',
+          username: form.username || 'postgres',
+          password: form.password || '',
+        }),
+      }).catch(() => null)
+
+      if (res && res.ok) {
+        const data = await res.json()
+        if (data.status === 'success') {
+          setDbManageMessage(data.message || `Database ${action} completed!`)
+          if (data.databases && Array.isArray(data.databases)) {
+            setDiscoveredDbs(data.databases)
+          } else {
+            fetchDiscoveredDatabases()
+          }
+          if (action === 'create') setForm(prev => ({ ...prev, database: dbName }))
+          if (action === 'rename' && newName) setForm(prev => ({ ...prev, database: newName }))
+          if (action === 'drop' && form.database === dbName) setForm(prev => ({ ...prev, database: '' }))
+
+          setCreateDbModalOpen(false)
+          setRenameDbModalOpen(false)
+          setDeleteDbModalOpen(false)
+          setNewDbInputName('')
+          setRenameDbNewName('')
+        } else {
+          setDbManageError(data.message || 'Database operation failed')
+        }
+      } else {
+        setDbManageError('Visio Agent bridge connection failed. Please ensure visio-agent is running.')
+      }
+    } catch (err: any) {
+      setDbManageError(err?.message || 'Error executing database operation')
+    } finally {
+      setDbManageLoading(false)
     }
   }
 
@@ -207,41 +330,18 @@ export default function CreateConnectionPage() {
           const cleanHost = data.host.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
           setForm(prev => ({ ...prev, host: cleanHost }))
           setAgentStatus('active')
-          setAgentMessage(`✨ Successfully auto-bridged! Host pre-filled: ${cleanHost}`)
+          setAgentMessage(`✨ Successfully auto-bridged! Tunnel Host pre-filled: ${cleanHost}`)
         }
 
         // Auto-discover local databases
-        try {
-          const dbRes = await fetch('http://127.0.0.1:4567/db/discover', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              port: form.port || '5432',
-              username: form.username || 'postgres',
-              password: form.password || '',
-            }),
-          }).catch(() => null)
-
-          if (dbRes && dbRes.ok) {
-            const dbData = await dbRes.json()
-            if (dbData.databases && dbData.databases.length > 0) {
-              setDiscoveredDbs(dbData.databases)
-              // Auto-select first discovered database if empty
-              if (!form.database && dbData.databases[0]) {
-                setForm(prev => ({ ...prev, database: dbData.databases[0] }))
-              }
-            }
-          }
-        } catch {
-          // Ignore discovery errors
-        }
+        fetchDiscoveredDatabases()
       } else {
         setAgentStatus('offline')
-        setAgentMessage('💡 Visio Agent desktop app is not detected on your computer. Download Visio Agent or use the manual tunnel guide below!')
+        setAgentMessage('💡 Visio Agent desktop binary is offline. Run "npx visio-agent@latest" in your terminal to start.')
       }
     } catch (err: any) {
       setAgentStatus('offline')
-      setAgentMessage('💡 Visio Agent is offline. Download Visio Agent or use the manual tunnel guide below!')
+      setAgentMessage('💡 Visio Agent is offline. Run "npx visio-agent@latest" in your terminal.')
     }
     setIsBridging(false)
   }
@@ -282,10 +382,9 @@ export default function CreateConnectionPage() {
     setIsLoading(true)
 
     try {
-      // ── API CALL: POST /db-agent ───────────────────────────────────────
       await api.post('/db-agent', {
         name: form.name,
-        type: form.type, // backend expects "POSTGRES" not "postgres"
+        type: form.type,
         host: form.host,
         port: parseInt(form.port, 10),
         database: form.database,
@@ -293,7 +392,6 @@ export default function CreateConnectionPage() {
         password: form.password,
         ssl: form.ssl,
       })
-      // ─────────────────────────────────────────────────────────────────
       setIsSuccess(true)
       setTimeout(() => router.push('/connections'), 1500)
     } catch (err: any) {
@@ -310,13 +408,20 @@ export default function CreateConnectionPage() {
   ───────────────────────────────────────── */
   if (isSuccess) {
     return (
-      <div className="min-h-full flex items-center justify-center p-6">
-        <div className="text-center space-y-3">
-          <div className="w-14 h-14 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mx-auto">
-            <CheckCircle2 className="w-7 h-7 text-blue-400" />
+      <div className="min-h-full flex items-center justify-center p-6 bg-visio-grid">
+        <div className="text-center space-y-4 max-w-sm p-8 rounded-2xl bg-card/80 border border-emerald-500/30 backdrop-blur-xl shadow-2xl animate-in zoom-in-95">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto shadow-inner">
+            <CheckCircle2 className="w-8 h-8 text-emerald-400" />
           </div>
-          <h2 className="text-lg font-semibold text-foreground">Connection Created</h2>
-          <p className="text-sm text-muted-foreground">Redirecting to your connections...</p>
+          <div className="space-y-1">
+            <h2 className="text-lg font-bold text-foreground">Connection Saved!</h2>
+            <p className="text-xs text-muted-foreground">
+              Connected to <span className="font-mono text-emerald-400 font-semibold">{form.database}</span>. Redirecting to workspace...
+            </p>
+          </div>
+          <div className="pt-2 flex justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-sky-400" />
+          </div>
         </div>
       </div>
     )
@@ -326,594 +431,318 @@ export default function CreateConnectionPage() {
      FORM
   ───────────────────────────────────────── */
   return (
-    <div className="min-h-full p-4 sm:p-8">
-      <div className="max-w-2xl mx-auto">
+    <div className="min-h-full p-4 sm:p-8 bg-visio-grid">
+      <div className="max-w-3xl mx-auto space-y-6">
 
         {/* ── Page Header ── */}
-        <div className="mb-8">
-          {/* Breadcrumb trail */}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4">
-            <button
-              onClick={() => router.push('/connections')}
-              className="hover:text-blue-400 transition-colors"
-            >
-              Connections
-            </button>
-            <ChevronRight className="w-3 h-3" />
-            <span className="text-foreground font-medium">New Connection</span>
-          </div>
+        <div>
+          <button
+            onClick={() => router.push('/connections')}
+            className="inline-flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-sky-400 transition-colors mb-3"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to Connections
+          </button>
 
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">
+          <h1 className="text-2xl font-black text-foreground tracking-tight flex items-center gap-2.5">
+            <Database className="w-6 h-6 text-sky-400" />
             New Database Connection
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Connect to your database to start exploring and visualizing your data.
+          <p className="text-xs text-muted-foreground mt-1">
+            Connect your cloud or local databases seamlessly to Visio's visualization agent.
           </p>
         </div>
 
-        {/* ── Form Card ── */}
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
+        {/* ── Main Form Card ── */}
+        <div className="bg-card/80 border border-border/80 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-xl">
 
-          {/* Card header strip */}
-          <div className="px-6 py-4 border-b border-border flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-              <Database className="w-4 h-4 text-blue-400" />
+          {/* Card Header Strip */}
+          <div className="px-6 py-4 border-b border-border/80 flex items-center justify-between bg-card/40">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center">
+                <Server className="w-4 h-4 text-sky-400" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-foreground">Connection Configuration</p>
+                <p className="text-[10px] text-muted-foreground">Configure host, authentication, and database target</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground">Connection Details</p>
-              <p className="text-xs text-muted-foreground">All fields marked are required</p>
-            </div>
+
+            {/* Mode Switcher Pills */}
+            {!isSqlite && (
+              <div className="flex items-center gap-1 p-1 bg-background/80 rounded-xl border border-border/80">
+                <button
+                  type="button"
+                  onClick={() => setTargetMode('direct')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    targetMode === 'direct'
+                      ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Cloud className="w-3.5 h-3.5" />
+                  Direct / Cloud DB
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetMode('tunnel')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    targetMode === 'tunnel'
+                      ? 'bg-gradient-to-r from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/20'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-300" />
+                  Local DB (Visio Agent)
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="p-6 space-y-8">
 
             {/* API error */}
             {apiError && (
-              <div className="flex items-center gap-3 p-3.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 font-medium">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 {apiError}
               </div>
             )}
 
-            {/* ── SECTION 1: General ── */}
-            <section className="space-y-5">
-              <h2 className="text-[11px] font-bold uppercase tracking-widest text-blue-400 border-b border-border pb-2">
-                General
-              </h2>
-
-              {/* Connection Name */}
-              <Field
-                label="Connection Name"
-                icon={<Hash className="w-3.5 h-3.5" />}
-                error={errors.name}
-                hint="A friendly name to identify this connection"
-              >
+            {/* ── FAST SETUP VIA CONNECTION URI ── */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-500/10 via-blue-500/5 to-transparent border border-sky-500/20 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-amber-300 fill-current" />
+                  Import via Connection String / URI
+                </span>
+                <span className="text-[10px] font-mono text-muted-foreground">Postgres, MySQL, SQL Server</span>
+              </div>
+              <div className="relative">
                 <Input
-                  placeholder="e.g. Production DB"
-                  value={form.name}
-                  onChange={e => set('name', e.target.value)}
-                  className={`bg-background h-10 ${errors.name ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                  placeholder="postgresql://username:password@localhost:5432/database_name?sslmode=require"
+                  value={connectionUri}
+                  onChange={e => handleParseUri(e.target.value)}
+                  className="bg-background/90 h-10 text-xs font-mono pr-20 rounded-xl border-sky-500/30 focus-visible:ring-sky-500/30 placeholder:text-muted-foreground/50"
                 />
-              </Field>
-
-              {/* DB Type */}
-              <Field
-                label="Database Type"
-                icon={<Database className="w-3.5 h-3.5" />}
-                error={errors.type}
-              >
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {DB_TYPES.map(db => (
-                    <button
-                      key={db.value}
-                      type="button"
-                      onClick={() => handleTypeSelect(db.value)}
-                      className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 ${form.type === db.value
-                          ? 'bg-blue-500/10 border-blue-500/40 text-blue-400'
-                          : 'bg-background border-border text-muted-foreground hover:border-blue-500/30 hover:text-blue-400 hover:bg-blue-500/5'
-                        }`}
-                    >
-                      {db.label}
-                    </button>
-                  ))}
-                </div>
-                {errors.type && (
-                  <p className="flex items-center gap-1.5 text-xs text-red-400 mt-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.type}
-                  </p>
-                )}
-              </Field>
-            </section>
-
-            {/* ── SECTION 2: Server ── */}
-            <section className="space-y-5">
-              <div className="flex items-center justify-between border-b border-border pb-2">
-                <h2 className="text-[11px] font-bold uppercase tracking-widest text-blue-400">
-                  Server & Connection Mode
-                </h2>
-                {!isSqlite && (
-                  <div className="flex items-center gap-1 p-0.5 bg-secondary rounded-lg border border-border">
-                    <button
-                      type="button"
-                      onClick={() => setTargetMode('direct')}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                        targetMode === 'direct'
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Cloud className="w-3 h-3" />
-                      Direct / Cloud DB
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTargetMode('tunnel')}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                        targetMode === 'tunnel'
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Zap className="w-3 h-3 text-amber-300" />
-                      Local DB (TCP Tunnel)
-                    </button>
-                  </div>
+                {connectionUri && (
+                  <button
+                    type="button"
+                    onClick={() => handleParseUri('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px] px-2 py-0.5 rounded bg-card border border-border"
+                  >
+                    Clear
+                  </button>
                 )}
               </div>
+              {uriParseStatus && (
+                <p className="text-xs text-emerald-400 font-semibold flex items-center gap-1.5 animate-in fade-in">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                  {uriParseStatus}
+                </p>
+              )}
+              {uriParseError && (
+                <p className="text-xs text-rose-400 font-medium flex items-center gap-1.5 animate-in fade-in">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                  {uriParseError}
+                </p>
+              )}
+            </div>
 
-              {/* ── OPTION A: SENIOR UI/UX HERO DESKTOP AGENT CARD ── */}
-              {!isSqlite && targetMode === 'tunnel' && (
-                <div className="p-5 bg-gradient-to-br from-slate-900/90 via-blue-950/40 to-slate-900/90 border border-blue-500/30 rounded-2xl shadow-xl space-y-4 backdrop-blur-md">
+            {/* ── SECTION 1: General ── */}
+            <section className="space-y-4">
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-sky-400 border-b border-border/80 pb-2">
+                1. General Settings
+              </h2>
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                {/* Connection Name */}
+                <Field
+                  label="Connection Name"
+                  icon={<Hash className="w-3.5 h-3.5" />}
+                  error={errors.name}
+                  hint="Friendly display name"
+                >
+                  <Input
+                    placeholder="e.g. Production PostgreSQL"
+                    value={form.name}
+                    onChange={e => set('name', e.target.value)}
+                    className={`bg-background/80 h-10 text-xs rounded-xl ${errors.name ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
+                  />
+                </Field>
+
+                {/* DB Type */}
+                <Field
+                  label="Engine Type"
+                  icon={<Database className="w-3.5 h-3.5" />}
+                  error={errors.type}
+                >
+                  <div className="grid grid-cols-2 gap-2">
+                    {DB_TYPES.map(db => (
+                      <button
+                        key={db.value}
+                        type="button"
+                        onClick={() => handleTypeSelect(db.value)}
+                        className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all duration-150 ${form.type === db.value
+                            ? 'bg-sky-500/15 border-sky-500/40 text-sky-400 shadow-sm'
+                            : 'bg-background/60 border-border/80 text-muted-foreground hover:border-sky-500/30 hover:text-sky-400'
+                          }`}
+                      >
+                        {db.label}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              </div>
+            </section>
+
+            {/* ── SECTION 2: Visio Agent Auto-Bridge (Local Mode) ── */}
+            {!isSqlite && targetMode === 'tunnel' && (
+              <section className="space-y-4">
+                <div className="p-5 bg-gradient-to-br from-slate-900/90 via-sky-950/30 to-slate-900/90 border border-sky-500/30 rounded-2xl shadow-xl space-y-4 backdrop-blur-md">
                   
                   {/* Card Header & Status */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-blue-500/20">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-sky-500/20">
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 border border-blue-400/40 flex items-center justify-center text-white shadow-lg shrink-0">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-blue-600 border border-sky-400/40 flex items-center justify-center text-white shadow-lg shrink-0">
                         <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-bold text-foreground tracking-wide">Visio Desktop Agent</p>
+                          <p className="text-xs font-extrabold text-foreground tracking-wide">Visio Desktop Agent</p>
                           <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1.5 border shadow-sm ${
                             agentStatus === 'active'
                               ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40'
                               : agentStatus === 'checking'
                               ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-                              : 'bg-secondary/80 text-muted-foreground border-border'
+                              : 'bg-slate-800 text-muted-foreground border-border'
                           }`}>
                             <span className={`w-2 h-2 rounded-full ${
                               agentStatus === 'active' ? 'bg-emerald-400 animate-ping' : agentStatus === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-muted-foreground'
                             }`} />
-                            {agentStatus === 'active' ? 'Agent Active (127.0.0.1:4567)' : agentStatus === 'checking' ? 'Connecting to Agent...' : 'Standby / App Not Detected'}
+                            {agentStatus === 'active' ? 'Agent Active (127.0.0.1:4567)' : agentStatus === 'checking' ? 'Checking Agent...' : 'Agent Offline'}
                           </span>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">Automated local-to-cloud bridge &amp; database discovery</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Automated local database discovery &amp; secure tunnel bridge</p>
                       </div>
                     </div>
 
                     <button
                       type="button"
-                      onClick={checkAgentHealth}
+                      onClick={() => checkAgentHealth(false)}
                       title="Re-check Agent Connection"
-                      className="self-start sm:self-center px-2.5 py-1 rounded-lg bg-secondary/80 hover:bg-secondary text-xs text-muted-foreground hover:text-foreground border border-border flex items-center gap-1 transition-colors"
+                      className="px-3 py-1.5 rounded-xl bg-card border border-border/80 text-xs font-semibold text-muted-foreground hover:text-sky-400 hover:border-sky-500/30 flex items-center gap-1.5 transition-all"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${agentStatus === 'checking' ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`w-3.5 h-3.5 ${agentStatus === 'checking' ? 'animate-spin text-sky-400' : ''}`} />
                       <span>Refresh Agent</span>
                     </button>
                   </div>
 
-                  {/* Local Credentials Sub-Card */}
-                  <div className="p-4 rounded-xl bg-background/60 border border-border/80 space-y-3">
-                    <p className="text-xs font-semibold text-blue-300 uppercase tracking-wider flex items-center gap-1.5">
-                      <Lock className="w-3.5 h-3.5 text-amber-400" />
-                      Local Database Credentials &amp; Port
-                    </p>
+                  {/* Primary CTA Button */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={trigger1ClickAutoBridge}
+                      disabled={isBridging}
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-blue-500 text-white shadow-lg shadow-sky-500/20 flex items-center justify-center gap-2 transition-all transform active:scale-95 disabled:opacity-50"
+                    >
+                      {isBridging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 text-amber-300 fill-current" />}
+                      {isBridging ? 'Bridging & Discovering DBs...' : '⚡ Auto-Bridge & Scan Local DBs'}
+                    </button>
 
-                    <div className="grid sm:grid-cols-3 gap-3">
-                      {/* Port */}
-                      <div>
-                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Local Port</label>
-                        <Input
-                          placeholder="5432"
-                          value={form.port}
-                          onChange={e => set('port', e.target.value)}
-                          className="bg-background/90 h-9 text-xs font-mono"
-                        />
-                      </div>
-
-                      {/* Username */}
-                      <div>
-                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Username</label>
-                        <Input
-                          placeholder="postgres"
-                          value={form.username}
-                          onChange={e => set('username', e.target.value)}
-                          className="bg-background/90 h-9 text-xs"
-                        />
-                      </div>
-
-                      {/* Password */}
-                      <div>
-                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Password</label>
-                        <div className="relative">
-                          <Input
-                            type={showPassword ? 'text' : 'password'}
-                            placeholder="••••••••"
-                            value={form.password}
-                            onChange={e => set('password', e.target.value)}
-                            className="bg-background/90 h-9 text-xs pr-8"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword(!showPassword)}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[10px]"
-                          >
-                            {showPassword ? 'Hide' : 'Show'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Primary CTA Button */}
-                    <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={trigger1ClickAutoBridge}
-                        disabled={isBridging}
-                        className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition-all transform active:scale-95 disabled:opacity-50"
-                      >
-                        {isBridging ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 fill-current text-amber-300" />}
-                        {isBridging ? 'Bridging & Discovering DBs...' : '⚡ Auto-Bridge & Discover Local DBs'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={fetchDiscoveredDatabases}
-                        className="px-3 py-2 rounded-lg bg-secondary/80 hover:bg-secondary text-xs font-medium text-muted-foreground hover:text-foreground border border-border flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-                        Scan DBs Only
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={fetchDiscoveredDatabases}
+                      className="px-3.5 py-2.5 rounded-xl bg-card hover:bg-card/80 border border-border/80 text-xs font-semibold text-muted-foreground hover:text-sky-400 flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                      Scan Local DBs
+                    </button>
                   </div>
 
-                  {/* Feedback Banner */}
+                  {/* Agent Feedback Banner */}
                   {agentMessage && (
-                    <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 text-xs text-blue-300 flex items-center gap-2 animate-in fade-in duration-200">
+                    <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-xs text-sky-300 flex items-center gap-2 animate-in fade-in">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                       <span>{agentMessage}</span>
                     </div>
                   )}
 
-                  {dbScanError && (
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2 animate-in fade-in duration-200">
-                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>{dbScanError}</span>
+                  <div className="p-4 rounded-xl bg-card/90 border border-sky-500/30 space-y-3 shadow-inner">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
+                        <Terminal className="w-4 h-4 text-sky-400" />
+                        Visio Local Agent Terminal Command
+                      </p>
+                      <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                        Zero-Install (@latest)
+                      </span>
                     </div>
-                  )}
 
-                  {agentStatus === 'offline' && (
-                    <div className="p-4 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                            <Laptop className="w-4 h-4 text-amber-400" />
-                            Visio Desktop Agent Not Running
-                          </p>
-                          <p className="text-[11px] text-muted-foreground mt-0.5">
-                            Run the zero-install command below or download the desktop app to enable 1-click local DB auto-bridging.
-                          </p>
+                    <div className="p-3 rounded-xl bg-black/80 border border-border/80 flex items-center justify-between gap-3 font-mono text-xs shadow-md">
+                      <span className="text-emerald-400 font-bold truncate tracking-wide">
+                        npx visio-agent@latest
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText('npx visio-agent@latest')
+                          setCopiedCmd('npx visio-agent@latest')
+                          setTimeout(() => setCopiedCmd(null), 2000)
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-xs font-sans font-bold flex items-center gap-1.5 shrink-0 transition-all border border-sky-500/30 active:scale-95"
+                      >
+                        {copiedCmd === 'npx visio-agent@latest' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-sky-400" />}
+                        {copiedCmd === 'npx visio-agent@latest' ? 'Copied!' : 'Copy NPX'}
+                      </button>
+                    </div>
+
+                    {/* ── Why visio-agent @latest Feature Explanation ── */}
+                    <div className="pt-2 border-t border-border/60 space-y-2">
+                      <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-sky-400" />
+                        Why do we run <code className="text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded text-[11px] font-mono">npx visio-agent@latest</code>?
+                      </p>
+                      <div className="grid sm:grid-cols-2 gap-2 text-[11px] text-muted-foreground leading-relaxed">
+                        <div className="p-2.5 rounded-xl bg-background/60 border border-border/60 space-y-1">
+                          <span className="font-bold text-foreground flex items-center gap-1 text-sky-400">
+                            🔒 Secure Local Tunneling
+                          </span>
+                          Bridges your local database (<code className="text-sky-300 font-mono">127.0.0.1:5432</code>, Docker, or dev DBs) directly to Visio without opening router ports or exposing raw credentials publicly.
                         </div>
-
-                        <a
-                          href="https://github.com/visio-app/releases/latest"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-xs font-bold text-blue-300 transition-colors shrink-0"
-                        >
-                          <Download className="w-3.5 h-3.5" /> Download App Binary
-                        </a>
+                        <div className="p-2.5 rounded-xl bg-background/60 border border-border/60 space-y-1">
+                          <span className="font-bold text-foreground flex items-center gap-1 text-emerald-400">
+                            ⚡ Zero-Install (@latest)
+                          </span>
+                          Running <code className="text-emerald-300 font-mono">@latest</code> guarantees instant access to new schema tools, query speed optimizations, and security updates without global NPM installation.
+                        </div>
                       </div>
-
-                      {/* NPX Instant Copy Command */}
-                      <div className="p-2.5 rounded-lg bg-black/60 border border-border flex items-center justify-between gap-2 font-mono text-xs">
-                        <span className="text-emerald-400 font-semibold truncate">
-                          npx visio-agent
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText('npx visio-agent')
-                            setCopiedCmd('npx visio-agent')
-                            setTimeout(() => setCopiedCmd(null), 2000)
-                          }}
-                          className="px-2 py-1 rounded bg-secondary hover:bg-secondary/80 text-[11px] text-foreground flex items-center gap-1 shrink-0 transition-colors"
-                        >
-                          {copiedCmd === 'npx visio-agent' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-muted-foreground" />}
-                          {copiedCmd === 'npx visio-agent' ? 'Copied NPX!' : 'Copy NPX'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Professional Step-by-Step Local Tunnel Wizard */}
-              {!isSqlite && targetMode === 'tunnel' && (
-                <div className="p-5 bg-card/90 border border-amber-500/30 rounded-xl shadow-lg space-y-4">
-                  {/* Header & Sub-mode Selector */}
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
-                        <Zap className="w-3.5 h-3.5" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-foreground">Local Database Tunnel Guide</p>
-                        <p className="text-[11px] text-muted-foreground">Expose local databases securely to production.</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1 p-0.5 bg-muted/60 rounded-lg border border-border shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => setBridgeType('permanent')}
-                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
-                          bridgeType === 'permanent'
-                            ? 'bg-amber-500 text-black shadow-sm'
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        🌟 Permanent 24/7 Bridge
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBridgeType('quick')}
-                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-all ${
-                          bridgeType === 'quick'
-                            ? 'bg-amber-500/20 text-amber-300 shadow-sm'
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        ⚡ Quick Dev Tunnel
-                      </button>
                     </div>
                   </div>
-
-                  {bridgeType === 'permanent' ? (
-                    /* ── PERMANENT MULTI-DB BRIDGE (ONE-TIME SETUP) ── */
-                    <div className="space-y-4">
-                      <div className="p-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg text-xs text-amber-300 leading-relaxed">
-                        ✨ <strong>Set up ONCE for all your local databases:</strong> This configures a single permanent background bridge on your laptop that handles unlimited local databases (Postgres, MySQL, Staging) without changing URLs or re-running commands after reboots.
-                      </div>
-
-                      {/* STEP 1 */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">1</span>
-                            Authenticate & Create Named Tunnel (One-time)
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                          <code className="font-mono text-[11px] text-foreground overflow-x-auto block max-w-[420px] whitespace-nowrap">
-                            cloudflared tunnel login &amp;&amp; cloudflared tunnel create visio-bridge
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard('cloudflared tunnel login && cloudflared tunnel create visio-bridge', 'perm-step1')}
-                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
-                          >
-                            {copiedCmd === 'perm-step1' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                            {copiedCmd === 'perm-step1' ? 'Copied' : 'Copy'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* STEP 2 */}
-                      <div className="space-y-2">
-                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">2</span>
-                          Multi-DB Ingress Config (<code className="text-amber-300 font-mono">~/.cloudflared/config.yml</code>)
-                        </span>
-                        <div className="p-2.5 bg-background border border-border rounded-lg space-y-1">
-                          <div className="flex items-center justify-between border-b border-border/50 pb-1 mb-1">
-                            <span className="text-[10px] text-muted-foreground font-mono">config.yml (Route multiple local DBs easily)</span>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard(
-                                `tunnel: visio-bridge\ncredentials-file: ~/.cloudflared/visio-bridge.json\n\ningress:\n  - hostname: db.mycompany.com\n    service: tcp://localhost:5432\n  - service: http_status:404`,
-                                'perm-yaml'
-                              )}
-                              className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
-                            >
-                              {copiedCmd === 'perm-yaml' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                              {copiedCmd === 'perm-yaml' ? 'Copied' : 'Copy Config'}
-                            </button>
-                          </div>
-                          <pre className="font-mono text-[10px] text-amber-200/90 leading-relaxed overflow-x-auto">
-{`tunnel: visio-bridge
-credentials-file: ~/.cloudflared/visio-bridge.json
-
-ingress:
-  - hostname: db.mycompany.com
-    service: tcp://localhost:5432
-  - service: http_status:404`}
-                          </pre>
-                        </div>
-                      </div>
-
-                      {/* STEP 3 */}
-                      <div className="space-y-2">
-                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">3</span>
-                          Route DNS & Start 24/7 Auto-Boot Service
-                        </span>
-                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                          <code className="font-mono text-[11px] text-blue-300 overflow-x-auto block max-w-[420px] whitespace-nowrap">
-                            cloudflared tunnel route dns visio-bridge db.mycompany.com &amp;&amp; cloudflared tunnel run visio-bridge
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard('cloudflared tunnel route dns visio-bridge db.mycompany.com && cloudflared tunnel run visio-bridge', 'perm-step3')}
-                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
-                          >
-                            {copiedCmd === 'perm-step3' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                            {copiedCmd === 'perm-step3' ? 'Copied' : 'Copy'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    /* ── QUICK DEV TUNNEL (TEMPORARY 5-SECOND TEST) ── */
-                    <div className="space-y-4">
-                      {/* STEP 1 */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">1</span>
-                            Install `cloudflared` (One-time setup on your machine)
-                          </span>
-                          <div className="flex items-center gap-1 text-[10px]">
-                            <button
-                              type="button"
-                              onClick={() => setActiveOs('mac')}
-                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'mac' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                            >
-                              macOS
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setActiveOs('linux')}
-                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'linux' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                            >
-                              Linux
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setActiveOs('win')}
-                              className={`px-2 py-0.5 rounded transition-colors ${activeOs === 'win' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                            >
-                              Windows
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                          <code className="font-mono text-[11px] text-foreground overflow-x-auto block max-w-[420px] whitespace-nowrap">
-                            {activeOs === 'mac' && 'brew install cloudflared'}
-                            {activeOs === 'linux' && 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'}
-                            {activeOs === 'win' && 'winget install Cloudflare.cloudflared'}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={() => copyToClipboard(
-                              activeOs === 'mac'
-                                ? 'brew install cloudflared'
-                                : activeOs === 'linux'
-                                ? 'curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared.deb'
-                                : 'winget install Cloudflare.cloudflared',
-                              'inst'
-                            )}
-                            className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
-                          >
-                            {copiedCmd === 'inst' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                            {copiedCmd === 'inst' ? 'Copied' : 'Copy'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* STEP 2 */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                            <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">2</span>
-                            Choose Execution Mode
-                          </span>
-                          <div className="flex items-center gap-1 text-[10px]">
-                            <button
-                              type="button"
-                              onClick={() => setTunnelServiceMode('quick')}
-                              className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'quick' ? 'bg-amber-500/20 text-amber-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                            >
-                              ⚡ Foreground Mode
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setTunnelServiceMode('daemon')}
-                              className={`px-2 py-0.5 rounded transition-colors ${tunnelServiceMode === 'daemon' ? 'bg-blue-500/20 text-blue-300 font-semibold' : 'text-muted-foreground hover:text-foreground'}`}
-                            >
-                              🔄 Background Process
-                            </button>
-                          </div>
-                        </div>
-
-                        {tunnelServiceMode === 'quick' ? (
-                          <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border">
-                            <code className="font-mono text-[11px] text-amber-300">
-                              cloudflared tunnel --url http://localhost:4567
-                            </code>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard('cloudflared tunnel --url http://localhost:4567', 'run')}
-                              className="text-muted-foreground hover:text-amber-400 flex items-center gap-1 text-[10px]"
-                            >
-                              {copiedCmd === 'run' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                              {copiedCmd === 'run' ? 'Copied' : 'Copy'}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="p-2.5 rounded-lg bg-background border border-border space-y-2">
-                            <p className="text-[11px] text-muted-foreground">Run in background (continues running even when terminal is closed):</p>
-                            <div className="flex items-center justify-between bg-muted/40 p-2 rounded">
-                              <code className="font-mono text-[11px] text-blue-300 overflow-x-auto block max-w-[400px] whitespace-nowrap">
-                                nohup cloudflared tunnel --url http://localhost:4567 &gt; cloudflared.log 2&gt;&amp;1 &amp;
-                              </code>
-                              <button
-                                type="button"
-                                onClick={() => copyToClipboard('nohup cloudflared tunnel --url http://localhost:4567 > cloudflared.log 2>&1 &', 'daemon')}
-                                className="text-muted-foreground hover:text-blue-400 flex items-center gap-1 text-[10px] shrink-0 ml-2"
-                              >
-                                {copiedCmd === 'daemon' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                {copiedCmd === 'daemon' ? 'Copied' : 'Copy'}
-                              </button>
-                            </div>
-                            <p className="text-[10px] text-muted-foreground/80">
-                              💡 Run <code className="text-blue-400 font-mono">cat cloudflared.log \| grep trycloudflare.com</code> to see your active background tunnel URL!
-                            </p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* STEP 3 */}
-                      <div className="space-y-2">
-                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                          <span className="w-4 h-4 rounded-full bg-amber-500/20 text-amber-300 text-[10px] flex items-center justify-center font-bold">3</span>
-                          Paste your generated tunnel hostname in Host below
-                        </span>
-                        <p className="text-[11px] text-muted-foreground leading-relaxed pl-5">
-                          Terminal will output a hostname like <code className="text-amber-400 font-mono">abc123xyz.trycloudflare.com</code> or your domain <code className="text-blue-400 font-mono">db.mycompany.com</code>. Paste it into the Host field.
-                        </p>
-                      </div>
-                    </div>
-                  )}
                 </div>
-              )}
+              </section>
+            )}
 
-              <div className={`grid gap-4 ${isSqlite ? '' : 'sm:grid-cols-3'}`}>
+            {/* ── SECTION 3: Server & Authentication ── */}
+            <section className="space-y-4">
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-sky-400 border-b border-border/80 pb-2">
+                2. Database Endpoint &amp; Credentials
+              </h2>
+
+              <div className="grid gap-4 sm:grid-cols-3">
                 {/* Host */}
                 {!isSqlite && (
                   <div className="sm:col-span-2">
                     <Field
-                      label={targetMode === 'tunnel' ? 'Tunnel Host or IP' : 'Host'}
+                      label={targetMode === 'tunnel' ? 'Host / Tunnel Host' : 'Server Host'}
                       icon={<Server className="w-3.5 h-3.5" />}
                       error={errors.host}
-                      hint={targetMode === 'tunnel' ? 'e.g. 0.tcp.ngrok.io or db.mycompany.com' : 'localhost or 192.168.1.1'}
+                      hint={targetMode === 'tunnel' ? 'Auto-filled by Visio Agent tunnel' : 'localhost or IP address'}
                     >
                       <Input
-                        placeholder={targetMode === 'tunnel' ? '0.tcp.ngrok.io or db.mycompany.com' : 'localhost or 192.168.1.1'}
+                        placeholder={targetMode === 'tunnel' ? 'abc123xyz.trycloudflare.com' : 'localhost'}
                         value={form.host}
-                        onChange={e => handleHostChange(e.target.value)}
-                        className={`bg-background h-10 ${errors.host ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                        onChange={e => set('host', e.target.value)}
+                        className={`bg-background/80 h-10 text-xs font-mono rounded-xl ${errors.host ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
                       />
                     </Field>
                   </div>
@@ -930,77 +759,13 @@ ingress:
                       placeholder="5432"
                       value={form.port}
                       onChange={e => set('port', e.target.value)}
-                      className={`bg-background h-10 ${errors.port ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                      className={`bg-background/80 h-10 text-xs font-mono rounded-xl ${errors.port ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
                     />
                   </Field>
                 )}
               </div>
 
-              {/* Database name */}
-              <Field
-                label="Database"
-                icon={<Database className="w-3.5 h-3.5" />}
-                error={errors.database}
-                hint={isSqlite ? 'Path to your SQLite file e.g. ./data.db' : 'The database name to connect to'}
-              >
-                <div className="flex gap-2">
-                  <Input
-                    placeholder={isSqlite ? './data.db' : 'my_database'}
-                    value={form.database}
-                    onChange={e => set('database', e.target.value)}
-                    className={`bg-background h-10 ${errors.database ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
-                  />
-                  {targetMode === 'tunnel' && (
-                    <button
-                      type="button"
-                      onClick={fetchDiscoveredDatabases}
-                      className="px-3 py-2 rounded-lg bg-secondary/80 hover:bg-secondary text-xs font-semibold text-foreground border border-border flex items-center gap-1.5 shrink-0 transition-colors"
-                      title="Scan local databases via Visio Agent"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-                      Scan Local DBs
-                    </button>
-                  )}
-                </div>
-
-                {dbScanError && (
-                  <p className="text-[11px] text-amber-400 font-medium pt-1 flex items-center gap-1">
-                    <span>💡 {dbScanError}</span>
-                  </p>
-                )}
-
-                {discoveredDbs.length > 0 && (
-                  <div className="flex items-center gap-1.5 pt-1.5 flex-wrap">
-                    <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-amber-300 animate-pulse" />
-                      Discovered Local DBs:
-                    </span>
-                    {discoveredDbs.map(db => (
-                      <button
-                        key={db}
-                        type="button"
-                        onClick={() => set('database', db)}
-                        className={`px-2 py-0.5 rounded text-[11px] font-mono transition-all border ${
-                          form.database === db
-                            ? 'bg-blue-600 text-white border-blue-500 shadow-sm font-semibold'
-                            : 'bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted border-border'
-                        }`}
-                      >
-                        {db}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </Field>
-            </section>
-
-            {/* ── SECTION 3: Auth ── */}
-            {!isSqlite && (
-              <section className="space-y-5">
-                <h2 className="text-[11px] font-bold uppercase tracking-widest text-blue-400 border-b border-border pb-2">
-                  Authentication
-                </h2>
-
+              {!isSqlite && (
                 <div className="grid sm:grid-cols-2 gap-4">
                   {/* Username */}
                   <Field
@@ -1009,10 +774,10 @@ ingress:
                     error={errors.username}
                   >
                     <Input
-                      placeholder="db_user"
+                      placeholder="postgres"
                       value={form.username}
                       onChange={e => set('username', e.target.value)}
-                      className={`bg-background h-10 ${errors.username ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                      className={`bg-background/80 h-10 text-xs rounded-xl ${errors.username ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
                     />
                   </Field>
 
@@ -1028,52 +793,171 @@ ingress:
                         placeholder="••••••••"
                         value={form.password}
                         onChange={e => set('password', e.target.value)}
-                        className={`bg-background h-10 pr-16 ${errors.password ? 'border-red-500/50 focus-visible:ring-red-500/30' : 'focus-visible:ring-blue-500/30'}`}
+                        className={`bg-background/80 h-10 text-xs pr-16 rounded-xl ${errors.password ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(p => !p)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-blue-400 transition-colors"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-sky-400 transition-colors font-medium"
                       >
                         {showPassword ? 'Hide' : 'Show'}
                       </button>
                     </div>
                   </Field>
                 </div>
+              )}
+            </section>
 
-                {/* SSL toggle */}
-                <Field
-                  label="SSL"
-                  icon={<Shield className="w-3.5 h-3.5" />}
-                >
+            {/* ── SECTION 4: Database Target & Management Toolbar ── */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between border-b border-border/80 pb-2">
+                <h2 className="text-[11px] font-bold uppercase tracking-wider text-sky-400">
+                  3. Select &amp; Manage Database
+                </h2>
+                {agentStatus === 'active' && (
                   <button
                     type="button"
-                    onClick={() => set('ssl', !form.ssl)}
-                    className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${form.ssl ? 'bg-blue-500' : 'bg-border'
-                      }`}
-                    role="switch"
-                    aria-checked={form.ssl}
+                    onClick={() => { setNewDbInputName(''); setCreateDbModalOpen(true) }}
+                    className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 text-white text-xs font-bold shadow-md shadow-sky-500/20 hover:from-sky-400 hover:to-blue-500 transition-all flex items-center gap-1.5 active:scale-95"
                   >
-                    <span
-                      className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transform transition-transform duration-200 ${form.ssl ? 'translate-x-4' : 'translate-x-0'
-                        }`}
-                    />
+                    <Plus className="w-3.5 h-3.5" /> Create Database
                   </button>
-                  <span className="ml-3 text-xs text-muted-foreground">
-                    {form.ssl ? 'SSL enabled — encrypted connection' : 'SSL disabled'}
-                  </span>
+                )}
+              </div>
+
+              {/* Database input */}
+              <Field
+                label="Target Database Name"
+                icon={<Database className="w-3.5 h-3.5" />}
+                error={errors.database}
+                hint={isSqlite ? 'Path to your SQLite file' : 'Select a scanned database or type database name directly'}
+              >
+                <div className="flex gap-2">
+                  <Input
+                    placeholder={isSqlite ? './data.db' : 'my_database'}
+                    value={form.database}
+                    onChange={e => set('database', e.target.value)}
+                    className={`bg-background/80 h-10 text-xs font-mono rounded-xl ${errors.database ? 'border-rose-500/50 focus-visible:ring-rose-500/30' : 'focus-visible:ring-sky-500/30'}`}
+                  />
+                  {targetMode === 'tunnel' && (
+                    <button
+                      type="button"
+                      onClick={fetchDiscoveredDatabases}
+                      className="px-3 py-2 rounded-xl bg-card border border-border/80 hover:border-sky-500/30 text-xs font-semibold text-foreground flex items-center gap-1.5 shrink-0 transition-colors"
+                      title="Scan local databases"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                      Scan
+                    </button>
+                  )}
+                </div>
+
+                {dbScanError && (
+                  <p className="text-xs text-amber-400 font-medium pt-1 flex items-center gap-1">
+                    <span>💡 {dbScanError}</span>
+                  </p>
+                )}
+              </Field>
+
+              {/* ── SENIOR DATABASE MANAGEMENT TOOLBAR (DISCOVERED DATABASES) ── */}
+              {discoveredDbs.length > 0 && (
+                <div className="p-4 rounded-2xl bg-card/60 border border-border/80 space-y-3 backdrop-blur-md">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                      Discovered Databases ({discoveredDbs.length})
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">Click to select · Hover for DB actions</span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {discoveredDbs.map(db => {
+                      const isSelected = form.database === db
+                      return (
+                        <div
+                          key={db}
+                          className={`group relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all ${
+                            isSelected
+                              ? 'bg-gradient-to-r from-sky-500/20 to-blue-500/20 border-sky-500 text-sky-300 font-bold shadow-md shadow-sky-500/10'
+                              : 'bg-background/80 border-border/80 text-muted-foreground hover:text-foreground hover:border-sky-500/30'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => set('database', db)}
+                            className="flex items-center gap-1.5 focus:outline-none"
+                          >
+                            <Database className={`w-3 h-3 ${isSelected ? 'text-sky-400' : 'text-muted-foreground'}`} />
+                            <span>{db}</span>
+                          </button>
+
+                          {/* Quick Actions (Rename / Delete) */}
+                          <div className="flex items-center gap-1 ml-1 pl-1 border-l border-border/60 opacity-80 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTargetDbToRename(db)
+                                setRenameDbNewName(db)
+                                setRenameDbModalOpen(true)
+                              }}
+                              className="p-1 rounded text-muted-foreground hover:text-sky-400 hover:bg-sky-500/10 transition-colors"
+                              title={`Rename database "${db}"`}
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTargetDbToDelete(db)
+                                setDeleteDbModalOpen(true)
+                              }}
+                              className="p-1 rounded text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              title={`Delete database "${db}"`}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* SSL toggle */}
+              {!isSqlite && (
+                <Field
+                  label="Encryption &amp; SSL"
+                  icon={<Shield className="w-3.5 h-3.5" />}
+                >
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => set('ssl', !form.ssl)}
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${form.ssl ? 'bg-sky-500' : 'bg-border'}`}
+                      role="switch"
+                      aria-checked={form.ssl}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-md transform transition-transform duration-200 ${form.ssl ? 'translate-x-5' : 'translate-x-0'}`}
+                      />
+                    </button>
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {form.ssl ? 'SSL Enabled (Encrypted connection)' : 'SSL Disabled'}
+                    </span>
+                  </div>
                 </Field>
-              </section>
-            )}
+              )}
+            </section>
 
           </div>
 
           {/* ── Footer Actions ── */}
-          <div className="px-6 py-4 border-t border-border flex items-center justify-between gap-3 bg-background/40">
+          <div className="px-6 py-4 border-t border-border/80 flex items-center justify-between gap-3 bg-card/40">
             <button
               type="button"
               onClick={() => router.push('/connections')}
-              className="text-sm text-muted-foreground hover:text-blue-400 transition-colors"
+              className="text-xs font-bold text-muted-foreground hover:text-foreground transition-colors"
             >
               Cancel
             </button>
@@ -1081,16 +965,16 @@ ingress:
             <Button
               onClick={handleSubmit}
               disabled={isLoading}
-              className="bg-blue-600 hover:bg-blue-500 text-white h-9 px-6 gap-2 transition-colors"
+              className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white h-10 px-6 gap-2 rounded-xl shadow-lg shadow-sky-500/20 font-bold transition-all active:scale-95"
             >
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Creating...
+                  Saving Connection...
                 </>
               ) : (
                 <>
-                  Create Connection
+                  Connect Database
                   <ChevronRight className="w-4 h-4" />
                 </>
               )}
@@ -1099,6 +983,177 @@ ingress:
         </div>
 
       </div>
+
+      {/* ─────────────────────────────────────────────────────────────────────────
+         DATABASE MANAGEMENT MODALS
+      ───────────────────────────────────────────────────────────────────────── */}
+
+      {/* ── Modal 1: Create Database Modal ── */}
+      {createDbModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-card border border-border/80 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                  <Plus className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-foreground">Create New Database</h3>
+              </div>
+              <button onClick={() => setCreateDbModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {dbManageError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
+                {dbManageError}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-muted-foreground">Database Name</label>
+              <Input
+                placeholder="e.g. staging_db"
+                value={newDbInputName}
+                onChange={e => setNewDbInputName(e.target.value)}
+                className="bg-background h-10 text-xs font-mono rounded-xl"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setCreateDbModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={dbManageLoading || !newDbInputName.trim()}
+                onClick={() => handleManageDatabase('create', newDbInputName.trim())}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-white shadow-md shadow-sky-500/20 flex items-center gap-1.5 disabled:opacity-50 transition-all"
+              >
+                {dbManageLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                Create Database
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal 2: Rename Database Modal ── */}
+      {renameDbModalOpen && targetDbToRename && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-card border border-border/80 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-foreground">Rename Database</h3>
+              </div>
+              <button onClick={() => setRenameDbModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {dbManageError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
+                {dbManageError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Renaming database <span className="font-mono text-sky-400 font-bold">{targetDbToRename}</span>
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-muted-foreground">New Database Name</label>
+                <Input
+                  placeholder="e.g. renamed_db"
+                  value={renameDbNewName}
+                  onChange={e => setRenameDbNewName(e.target.value)}
+                  className="bg-background h-10 text-xs font-mono rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRenameDbModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={dbManageLoading || !renameDbNewName.trim()}
+                onClick={() => handleManageDatabase('rename', targetDbToRename, renameDbNewName.trim())}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-white shadow-md shadow-sky-500/20 flex items-center gap-1.5 disabled:opacity-50 transition-all"
+              >
+                {dbManageLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pencil className="w-3.5 h-3.5" />}
+                Save New Name
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal 3: Delete Database Confirmation Modal ── */}
+      {deleteDbModalOpen && targetDbToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md bg-card border border-rose-500/30 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-rose-500/20 pb-3">
+              <div className="flex items-center gap-2 text-rose-400">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-foreground">Drop Database Confirmation</h3>
+              </div>
+              <button onClick={() => setDeleteDbModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {dbManageError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400">
+                {dbManageError}
+              </div>
+            )}
+
+            <div className="space-y-2 text-xs text-muted-foreground leading-relaxed">
+              <p>
+                Are you sure you want to drop database <span className="font-mono text-rose-400 font-bold">{targetDbToDelete}</span>?
+              </p>
+              <p className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 font-semibold">
+                ⚠️ Warning: This operation will terminate active connections and permanently delete all tables and data in this database.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteDbModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={dbManageLoading}
+                onClick={() => handleManageDatabase('drop', targetDbToDelete)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-500/20 flex items-center gap-1.5 disabled:opacity-50 transition-all"
+              >
+                {dbManageLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                Yes, Drop Database
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

@@ -159,9 +159,7 @@ export async function traverseRelation(
     throw new Error(`Unknown relation type "${relationType}"`)
   }
 
-  const resolvedColumn = relationType === 'belongsTo'
-    ? await resolveCompatibleTargetColumn(query, targetTable, targetColumn, sourceValue)
-    : targetColumn
+  const resolvedColumn = await resolveCompatibleTargetColumn(query, targetTable, targetColumn, sourceValue)
 
   if (!resolvedColumn) {
     return { columns: [], rows: [], total: 0 }
