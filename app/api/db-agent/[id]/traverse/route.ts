@@ -1,7 +1,7 @@
 import { NextRequest }                     from 'next/server'
 import { getRequestSession, unauthorized } from '@/lib/session'
-import { getConnectionConfig }             from '@/lib/connection'
-import { withPostgres }                    from '@/lib/db/postgres'
+import { runWithConnection }                 from '@/lib/connection'
+import { DeadConnectionError }               from '@/lib/db/postgres'
 import { traverseRelation }                from '@/lib/db/query'
 
 export async function POST(
@@ -14,7 +14,6 @@ export async function POST(
 
     const { id } = await params
     const body    = await req.json()
-    const config  = await getConnectionConfig(id, session.user.id)
 
     const {
       sourceTable,
@@ -41,7 +40,7 @@ export async function POST(
       )
     }
 
-    const result = await withPostgres(config, query =>
+    const result = await runWithConnection(id, session.user.id, query =>
       traverseRelation(query, {
         sourceTable,
         sourceColumn,
@@ -56,6 +55,12 @@ export async function POST(
 
     return Response.json({ success: true, data: result })
   } catch (err: any) {
+    if (err instanceof DeadConnectionError) {
+      return Response.json(
+        { error: err.message, disconnected: true, reconnect: true },
+        { status: 410 },
+      )
+    }
     console.error('[POST /api/db-agent/[id]/traverse]', err)
     return Response.json({ error: err.message ?? 'Internal server error' }, { status: 500 })
   }

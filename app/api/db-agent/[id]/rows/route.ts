@@ -1,7 +1,7 @@
 import { NextRequest }                     from 'next/server'
 import { getRequestSession, unauthorized } from '@/lib/session'
-import { getConnectionConfig }             from '@/lib/connection'
-import { withPostgres }                    from '@/lib/db/postgres'
+import { runWithConnection }                 from '@/lib/connection'
+import { DeadConnectionError }               from '@/lib/db/postgres'
 import { insertRow, updateRow, deleteRow } from '@/lib/db/query'
 
 // POST /api/db-agent/:id/rows  — Insert a new row into a table
@@ -21,13 +21,18 @@ export async function POST(
       return Response.json({ error: 'tableName and data are required' }, { status: 400 })
     }
 
-    const config = await getConnectionConfig(id, session.user.id)
-    const result = await withPostgres(config, query =>
+    const result = await runWithConnection(id, session.user.id, query =>
       insertRow(query, { tableName, data }),
     )
 
     return Response.json({ success: true, data: result }, { status: 201 })
   } catch (err: any) {
+    if (err instanceof DeadConnectionError) {
+      return Response.json(
+        { error: err.message, disconnected: true, reconnect: true },
+        { status: 410 },
+      )
+    }
     console.error('[POST /api/db-agent/[id]/rows]', err)
     return Response.json({ error: err.message ?? 'Internal server error' }, { status: 500 })
   }
@@ -53,13 +58,18 @@ export async function PUT(
       )
     }
 
-    const config = await getConnectionConfig(id, session.user.id)
-    const result = await withPostgres(config, query =>
+    const result = await runWithConnection(id, session.user.id, query =>
       updateRow(query, { tableName, primaryKey, data }),
     )
 
     return Response.json({ success: true, data: result })
   } catch (err: any) {
+    if (err instanceof DeadConnectionError) {
+      return Response.json(
+        { error: err.message, disconnected: true, reconnect: true },
+        { status: 410 },
+      )
+    }
     console.error('[PUT /api/db-agent/[id]/rows]', err)
     return Response.json({ error: err.message ?? 'Internal server error' }, { status: 500 })
   }
@@ -85,13 +95,18 @@ export async function DELETE(
       )
     }
 
-    const config = await getConnectionConfig(id, session.user.id)
-    const result = await withPostgres(config, query =>
+    const result = await runWithConnection(id, session.user.id, query =>
       deleteRow(query, { tableName, primaryKey }),
     )
 
     return Response.json({ success: true, data: result })
   } catch (err: any) {
+    if (err instanceof DeadConnectionError) {
+      return Response.json(
+        { error: err.message, disconnected: true, reconnect: true },
+        { status: 410 },
+      )
+    }
     console.error('[DELETE /api/db-agent/[id]/rows]', err)
     return Response.json({ error: err.message ?? 'Internal server error' }, { status: 500 })
   }

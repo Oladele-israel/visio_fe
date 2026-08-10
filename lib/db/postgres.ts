@@ -1,26 +1,23 @@
 import { Client } from 'pg'
 
 export interface DbConfig {
-  host:     string
-  port:     number
+  host: string
+  port: number
   database: string
   username: string
   password: string
-  ssl:      boolean
+  ssl: boolean
 }
 
 export type QueryFn = <T = any>(sql: string, params?: any[]) => Promise<T[]>
 
-/**
- * Opens a direct TCP Postgres connection, runs fn(query), then closes it.
- * Uses standard `pg` driver — works for any Postgres host (Neon, Prisma,
- * Supabase, RDS, localhost, etc.)
- *
- * NOTE: This works on Vercel only if your Postgres host supports SSL on port
- * 5432 AND Vercel's outbound TCP is not blocked. For Neon specifically you'd
- * swap this for @neondatabase/serverless. For now (dev + Prisma postgres) this
- * is correct.
- */
+export class DeadConnectionError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DeadConnectionError'
+  }
+}
+
 export async function withPostgres<T>(
   config: DbConfig,
   fn: (query: QueryFn) => Promise<T>,
@@ -30,15 +27,20 @@ export async function withPostgres<T>(
     .replace(/\/.*$/, '')
     .trim()
 
-  const isTryCloudflare = cleanHost.endsWith('.trycloudflare.com')
+  const isTryCloudflare =
+    cleanHost.endsWith('.trycloudflare.com') ||
+    cleanHost.includes('agent.')            ||
+    cleanHost.includes('tunnel.')           ||
+    cleanHost.endsWith('.usevisio.com')
+
   const isLoopback =
-    cleanHost === 'localhost'  ||
-    cleanHost === '127.0.0.1'  ||
+    cleanHost === 'localhost' ||
+    cleanHost === '127.0.0.1' ||
     cleanHost?.startsWith('::1')
 
   const isVercel = process.env.VERCEL === '1' || Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV)
 
-  // 1. Cloudflare Quick Tunnel / Agent Bridge handling
+  // 1. Cloudflare Tunnel / Agent Bridge handling
   if (isTryCloudflare || (isVercel && isLoopback)) {
     const agentUrl = cleanHost.startsWith('http') ? cleanHost : `https://${cleanHost}`
 
@@ -58,6 +60,9 @@ export async function withPostgres<T>(
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}))
           const msg = errData.message || errData.error || `Agent request failed with status ${res.status}`
+          if (res.status === 502 || res.status === 503 || res.status === 504 || res.status === 404) {
+            throw new DeadConnectionError(`Local database agent at ${cleanHost} is offline or process was killed.`)
+          }
           throw new Error(msg)
         }
 
@@ -69,7 +74,10 @@ export async function withPostgres<T>(
       } catch (err: any) {
         clearTimeout(timeoutId)
         if (err.name === 'AbortError') {
-          throw new Error('timeout expired waiting for local Visio Agent bridge response')
+          throw new DeadConnectionError(`Timeout expired waiting for local Visio Agent bridge at ${cleanHost}. The process may be killed or offline.`)
+        }
+        if (err.message && (err.message.includes('fetch failed') || err.message.includes('ECONNREFUSED'))) {
+          throw new DeadConnectionError(`Unable to reach local Visio Agent bridge at ${cleanHost}. The agent process has been killed.`)
         }
         throw err
       }
@@ -83,10 +91,10 @@ export async function withPostgres<T>(
   const targetPort = Number(config.port) || 5432
 
   const client = new Client({
-    host:     targetHost,
-    port:     targetPort,
+    host: targetHost,
+    port: targetPort,
     database: config.database,
-    user:     config.username,
+    user: config.username,
     password: config.password,
     ssl: config.ssl && !isLoopback && !isTryCloudflare
       ? { rejectUnauthorized: false }
@@ -102,6 +110,6 @@ export async function withPostgres<T>(
 
     return await fn(queryFn)
   } finally {
-    await client.end().catch(() => {})
+    await client.end().catch(() => { })
   }
 }
